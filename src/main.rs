@@ -5,17 +5,39 @@ extern crate clap;
 extern crate nom;
 
 use std::fs::File;
-use std::io::Read;
+use std::io;
+use std::io::{Read, Write};
 
 use clap::{Arg, App};
 
 #[derive(Debug)]
 struct Addr(u8, u8);
 
+impl ::std::fmt::Display for Addr {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+        let Addr(hi, lo) = *self;
+        write!(f, "${:>0pad$x}{:>0pad$x}", lo, hi, pad=2)
+    }
+}
+
 /// An 8080 Register
 #[derive(Debug)]
 enum Reg {
     A, B, C, D, E, H, L
+}
+
+impl ::std::fmt::Display for Reg {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+        match *self {
+            Reg::A => write!(f, "A"),
+            Reg::B => write!(f, "B"),
+            Reg::C => write!(f, "C"),
+            Reg::D => write!(f, "D"),
+            Reg::E => write!(f, "E"),
+            Reg::H => write!(f, "H"),
+            Reg::L => write!(f, "L")
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -24,6 +46,17 @@ enum RegPair {
     DE,
     HL,
     SP
+}
+
+impl ::std::fmt::Display for RegPair {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+        match *self {
+            RegPair::BC => write!(f, "B"),
+            RegPair::DE => write!(f, "D"),
+            RegPair::HL => write!(f, "H"),
+            RegPair::SP => write!(f, "SP")
+        }
+    }
 }
 
 /// An 8080 Op code and its data
@@ -178,6 +211,88 @@ enum Op {
     RM,
     JM(Addr),
     CM(Addr),
+}
+
+impl Op {
+    fn bytes(&self) -> u8 {
+        match *self {
+            Op::NOP => 1,
+            Op::MOV_RR(_, _) => 3,
+            Op::MOV_MR(_) => 2,
+            Op::MOV_RM(_) => 2,
+            Op::MVI_RD(_, _) => 3,
+            Op::MVI_M(_) => 2,
+            Op::MVI_A(_) => 2,
+            Op::JMP(_) => 3,
+            _ => 0
+        }
+    }
+}
+
+impl ::std::fmt::Display for Op {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+        match *self {
+            Op::NOP => write!(f, "NOP"),
+            Op::MOV_RR(ref dst, ref src) => write!(f, "MOV\t{},{}", dst, src),
+            Op::MOV_MR(ref src) => write!(f, "MOV\tM,{}", src),
+            Op::MOV_RM(ref dst) => write!(f, "MOV\t{},M", dst),
+            Op::MVI_RD(ref dst, d) => write!(f, "MOV\t{},#{}", dst, d),
+            Op::MVI_M(d) => write!(f, "MVI\tM,#${:>0pad$x}", d, pad=2),
+            Op::MVI_A(d) => write!(f, "MVI\tA,#${:01$x}", d, 2),
+            Op::JMP(ref addr) => write!(f, "JMP\t{}", addr),
+            Op::PUSH_PSW => write!(f, "PUSH\tPSW"),
+            Op::PUSH_SP(ref rp) => write!(f, "PUSH\t{}", rp),
+            Op::POP_PSW => write!(f, "POP\tPSW"),
+            Op::POP_SP(ref rp) => write!(f, "POP\t{}", rp),
+            Op::STA(ref addr) => write!(f, "STA\t{}", addr),
+            Op::LXI(ref dst, hi, lo) => write!(f, "LXI\t{},#${:>0pad$x}{:>0pad$x}", dst, hi, lo, pad=2),
+            Op::DCR_M => write!(f, "DCR\tM"),
+            Op::DCX(ref rp) => write!(f, "DCX\t{}", rp),
+            Op::DAD(ref rp) => write!(f, "DAD\t{}", rp),
+            Op::CALL(ref addr) => write!(f, "CALL\t{}", addr),
+            Op::IN(port) => write!(f, "IN\t\t#${:>0pad$x}", port, pad=2),
+            Op::OUT(port) => write!(f, "OUT\t#${:>0pad$x}", port, pad=2),
+            Op::RRC => write!(f, "RRC"),
+            Op::JC(ref addr) => write!(f, "JC\t\t{}", addr),
+            Op::LDA(ref addr) => write!(f, "LDA\t{}", addr),
+            Op::LDAX(ref rp) => write!(f, "LDAX\t{}", rp),
+            Op::INX(ref rp) => write!(f, "INX\t{}", rp),
+            Op::CPI(d) => write!(f, "CPI\t#${:>0pad$x}", d, pad=2),
+            Op::ANA_R(ref reg) => write!(f, "ANA\t{}", reg),
+            Op::JZ(ref addr) => write!(f, "JZ\t\t{}", addr),
+            Op::JNZ(ref addr) => write!(f, "JNZ\t{}", addr),
+            Op::JNC(ref addr) => write!(f, "JNC\t{}", addr),
+            Op::ADD_R(ref reg) => write!(f, "ADD\t{}", reg),
+            Op::ADD_M => write!(f, "ADD\tM"),
+            Op::ADI(d) => write!(f, "ADI\t{:>0pad$x}", d, pad=2),
+            Op::DAA => write!(f, "DAA"),
+            Op::SHLD(ref addr) => write!(f, "SHLD\t{}", addr),
+            Op::LHLD(ref addr) => write!(f, "LHLD\t{}", addr),
+            Op::XRA_R(ref reg) => write!(f, "XRA\t{}", reg),
+            // Op::SRA(ref reg) => write!("SRA\t{}", reg),
+            _ => write!(f, "{:?}", self)
+        }
+    }
+}
+
+struct Program(Vec<Op>);
+
+// impl ::std::fmt::Display for Program {
+//     fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+//         let Program(ref ops) = *self;
+//         for (i, op) in ops.iter().enumerate() {
+//             write!(f, "{:>0pad$x} {}\n", i, op, pad=4)
+//         }
+//     }
+// }
+
+impl Program {
+    pub fn write<W: Write>(&self, writer: &mut W) {
+        let &Program(ref ops) = self;
+        for (i, op) in ops.iter().enumerate() {
+            writer.write(&format!("{:>0pad$x} {}\n", i, op, pad=4).into_bytes()).unwrap();
+        }
+    }
 }
 
 // TOOD: change data[x] to data.get_unchecked for performance
@@ -624,10 +739,311 @@ fn get_opts() -> Options {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ConditionCodes {
+    z: u8,
+    s: u8,
+    p: u8,
+    cy: u8,
+    ac: u8,
+    pad: u8,
+}
+
+impl ConditionCodes {
+    pub fn new() -> ConditionCodes {
+        ConditionCodes {
+            z: 0x00,
+            s: 0x00,
+            p: 0x00,
+            cy: 0x00,
+            ac: 0x00,
+            pad: 0x00,
+        }
+    }
+
+    pub fn update(&mut self, x: u16) {
+        // If x is zero, set zero flag to 1, else 0.
+        self.z = if x & 0xff == 0 { 1 } else { 0 };
+        // Sign flag: if bit 7 is set, set the flag, else clear.
+        self.s = if x & 0x80 > 0 { 1 } else { 0 };
+        // Carry flag
+        self.cy = if x > 0xff { 1 } else { 0 };                
+
+        // TODO: Parity flag
+        // self.p = parity(x & 0xff);
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Memory(Vec<u8>);
+
+impl Memory {
+    pub fn new() -> Self {
+        Self::with_size(65536) // 16 kB of memory
+    }
+
+    pub fn with_size(size: usize) -> Self {
+        let mut mem = Vec::with_capacity(size);
+        mem.resize(size, 0); // zero the memory
+        Memory(mem)
+    }
+
+    #[inline(always)]
+    pub fn read(&self, i: u16) -> u8 {
+        let Memory(ref mem) = *self;
+        mem[i as usize]
+    }
+
+    pub fn write(&mut self, i: u16, d: u8) {
+        let Memory(ref mut mem) = *self;
+        mem[i as usize] = d;
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Machine {
+    a: u8,
+    b: u8,
+    c: u8,
+    d: u8,
+    e: u8,
+    h: u8,
+    l: u8,
+    sp: u16,
+    pc: u16,
+    mem: Memory,
+    cc: ConditionCodes,
+}
+
+impl Machine {
+    pub fn new() -> Self {
+        Self::with_size(65536)
+    }
+
+    pub fn with_size(size: usize) -> Self {
+        Machine {
+            a: 0x00,
+            b: 0x00,
+            c: 0x00,
+            d: 0x00,
+            e: 0x00,
+            h: 0x00,
+            l: 0x00,
+            sp: 0x0000,
+            pc: 0x0000,
+            mem: Memory::with_size(size),
+            cc: ConditionCodes::new(),
+        }
+    }
+
+    /// Read a byte from memory at the address pointed to
+    /// by PC and execute the OpCode given by that byte.
+    pub fn emulate(&mut self) {
+        let op = self.mem.read(self.pc);
+        match op {
+            0x00 => {}, // NOP
+            0x01 => {
+                self.c = self.mem.read(self.pc + 1);
+                self.b = self.mem.read(self.pc + 2);
+                self.pc += 2;
+            }, // LXI  B,word
+            0x02 => { // STAX B
+                let addr = (self.c as u16).wrapping_shl(8) + (self.b as u16);
+                self.a = self.mem.read(addr);
+            },
+            0x03 => { // INX B
+                let mut bc = (self.c as u16).wrapping_shl(8) + (self.b as u16);
+                bc += 1;
+                self.b = (bc & 0xff) as u8;
+                self.c = (bc & 0xff00).wrapping_shr(8) as u8;
+            },
+            0x04 => { // INR B
+                let mut b = self.b as u16;
+                b += 1;
+                self.cc.update(b);
+                self.b = (b & 0xff) as u8;
+            },
+            0x05 => { // DCR B
+                let mut b = self.b as u16;
+                b -= 1;
+                self.cc.update(b);
+                self.b = (b & 0xff) as u8;
+            },
+            0x06 => {
+                let x = self.mem.read(self.pc + 1);
+                self.b = x;
+                self.pc += 1;
+            },
+            0x41 => self.b = self.c, // MOV B,C
+            0x42 => self.b = self.d, // MOV B,D
+            0x43 => self.b = self.e, // MOV B,E
+            0x80 => { // ADD B
+                let result = self.a as u16 + self.b as u16;
+
+                self.cc.update(result);
+
+                // store result in register A
+                self.a = (result & 0xff) as u8;
+            }
+            _ => {}
+        }
+        self.pc += 1;
+    }
+
+    // TODO: safe interface for reading/writing from/to memory.
+    // This will allow the enforcement of a maximum memory size.
+}
+
 fn main() {
     let options = get_opts();
     let mut file = File::open(options.filename).unwrap();
     let mut buf = Vec::new();
     file.read_to_end(&mut buf).unwrap();
-    println!("{:?}", disassemble(&buf));
+
+    let mut machine = Machine::new();
+    for (i, byte) in buf.iter().enumerate() {
+        machine.mem.write(i as u16, byte.clone());
+    }
+    machine.emulate();
+    machine.emulate();
+    machine.emulate();
+    machine.emulate();
+    println!("{:?}", machine);
+
+    // let program = match disassemble(&buf) {
+    //     nom::IResult::Done(input, output) => Program(output),
+    //     _ => panic!("Failed to parse input.")
+    // };
+    // io::stdout().write(&format!("{}", program).into_bytes()).unwrap();
+    // program.write(&mut io::stdout());
+}
+
+#[test]
+fn test_nop() {
+    let mut machine = Machine::new();
+    machine.mem.write(0, 0x00);
+    machine.emulate();
+    let mut expected = Machine::new();
+    expected.pc += 1;
+    assert_eq!(machine, expected);
+}
+
+#[test]
+fn test_lxi_b() {
+    let mut machine = Machine::new();
+    machine.mem.write(0, 0x01);
+    machine.mem.write(1, 0xfe);
+    machine.mem.write(2, 0xff);
+    let mut expected = machine.clone();
+    expected.pc = 3;
+    expected.b = 0xff;
+    expected.c = 0xfe;
+
+    machine.emulate();
+    assert_eq!(machine, expected);
+}
+
+#[test]
+fn test_stax_b() {
+    let mut machine = Machine::new();
+    machine.mem.write(0, 0x02);
+    machine.mem.write(0xfffe, 0xaa);
+    machine.b = 0xfe;
+    machine.c = 0xff;
+    let mut expected = machine.clone();
+    expected.pc = 1;
+    expected.b = 0xfe;
+    expected.c = 0xff;
+    expected.a = 0xaa;
+
+    machine.emulate();
+    assert_eq!(machine, expected);
+}
+
+#[test]
+fn test_inx_b() {
+    let mut machine = Machine::new();
+    machine.mem.write(0, 0x03);
+    machine.b = 0xfe;
+    machine.c = 0xff;
+    let mut expected = machine.clone();
+    expected.pc = 1;
+    expected.b = 0xff;
+    expected.c = 0xff;
+
+    machine.emulate();
+    assert_eq!(machine, expected);
+}
+
+#[test]
+fn test_inr_b() {
+    //! Test increment register B
+    let mut machine = Machine::new();
+    machine.mem.write(0, 0x04);
+    machine.b = 0x01;
+    let mut expected = machine.clone();
+    expected.pc = 1;
+    expected.b = 0x02;
+
+    machine.emulate();
+    assert_eq!(machine, expected);
+}
+
+#[test]
+fn test_inr_b_carry_zero() {
+    //! Test increment register B with Carry and Zero flag
+    let mut machine = Machine::new();
+    machine.mem.write(0, 0x04);
+    machine.b = 0xff;
+    let mut expected = machine.clone();
+    expected.pc = 1;
+    expected.b = 0x00;
+    expected.cc.z = 1;
+    expected.cc.cy = 1;
+
+    machine.emulate();
+    assert_eq!(machine, expected);
+}
+
+#[test]
+fn test_dcr_b() {
+    //! Test decrement register B
+    let mut machine = Machine::new();
+    machine.mem.write(0, 0x05);
+    machine.b = 0x02;
+    let mut expected = machine.clone();
+    expected.pc = 1;
+    expected.b = 0x01;
+
+    machine.emulate();
+    assert_eq!(machine, expected);
+}
+
+#[test]
+fn test_dcr_b_zero() {
+    //! Test decrement register B with Zero flag
+    let mut machine = Machine::new();
+    machine.mem.write(0, 0x05);
+    machine.b = 0x01;
+    let mut expected = machine.clone();
+    expected.pc = 1;
+    expected.b = 0x00;
+    expected.cc.z = 1;
+
+    machine.emulate();
+    assert_eq!(machine, expected);
+}
+
+#[test]
+fn test_mvi_b() {
+    //! Test move immediate word to register B
+    let mut machine = Machine::new();
+    machine.mem.write(0, 0x06);
+    machine.mem.write(1, 0xee);
+    let mut expected = machine.clone();
+    expected.pc = 2;
+    expected.b = 0xee;
+
+    machine.emulate();
+    assert_eq!(machine, expected);
 }
