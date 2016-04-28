@@ -7,6 +7,7 @@ extern crate nom;
 use std::fs::File;
 use std::io;
 use std::io::{Read, Write};
+use std::u8;
 
 use clap::{Arg, App};
 
@@ -761,6 +762,7 @@ impl ConditionCodes {
         }
     }
 
+    #[inline(always)]
     pub fn update(&mut self, x: u16) {
         // If x is zero, set zero flag to 1, else 0.
         self.z = if x & 0xff == 0 { 1 } else { 0 };
@@ -779,7 +781,7 @@ struct Memory(Vec<u8>);
 
 impl Memory {
     pub fn new() -> Self {
-        Self::with_size(65536) // 16 kB of memory
+        Self::with_size(65536) // 16 kB of Memory
     }
 
     pub fn with_size(size: usize) -> Self {
@@ -794,6 +796,7 @@ impl Memory {
         mem[i as usize]
     }
 
+    #[inline(always)]
     pub fn write(&mut self, i: u16, d: u8) {
         let Memory(ref mut mem) = *self;
         mem[i as usize] = d;
@@ -801,7 +804,7 @@ impl Memory {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct Machine {
+struct Cpu {
     a: u8,
     b: u8,
     c: u8,
@@ -813,15 +816,16 @@ struct Machine {
     pc: u16,
     mem: Memory,
     cc: ConditionCodes,
+    interrupt_enabled: bool,
 }
 
-impl Machine {
+impl Cpu {
     pub fn new() -> Self {
         Self::with_size(65536)
     }
 
     pub fn with_size(size: usize) -> Self {
-        Machine {
+        Cpu {
             a: 0x00,
             b: 0x00,
             c: 0x00,
@@ -833,6 +837,7 @@ impl Machine {
             pc: 0x0000,
             mem: Memory::with_size(size),
             cc: ConditionCodes::new(),
+            interrupt_enabled: false,
         }
     }
 
@@ -846,16 +851,16 @@ impl Machine {
                 self.c = self.mem.read(self.pc + 1);
                 self.b = self.mem.read(self.pc + 2);
                 self.pc += 2;
-            }, // LXI  B,word
+            }, // LXI B,word
             0x02 => { // STAX B
-                let addr = (self.c as u16).wrapping_shl(8) + (self.b as u16);
+                let addr = (self.c as u16) << 8 | (self.b as u16);
                 self.a = self.mem.read(addr);
             },
             0x03 => { // INX B
-                let mut bc = (self.c as u16).wrapping_shl(8) + (self.b as u16);
+                let mut bc = (self.c as u16) << 8 | (self.b as u16);
                 bc += 1;
                 self.b = (bc & 0xff) as u8;
-                self.c = (bc & 0xff00).wrapping_shr(8) as u8;
+                self.c = ((bc & 0xff00) >> 8) as u8;
             },
             0x04 => { // INR B
                 let mut b = self.b as u16;
@@ -874,18 +879,296 @@ impl Machine {
                 self.b = x;
                 self.pc += 1;
             },
+            0x09 => { // DAD B
+                let bc = (self.b as u32) << 8 | (self.c as u32);
+                let mut hl = (self.h as u32) << 8 | (self.l as u32);
+                hl += bc;
+                self.l = (hl & 0xff) as u8;
+                self.h = ((hl & 0xff00) >> 8) as u8;
+                self.cc.cy = if (hl & 0xffff0000) > 0 { 1 } else { 0 };
+            },
+            0x0d => { // DCR C
+                let mut c = self.c as u16;
+                c -= 1;
+                self.cc.update(c);
+                self.c = (c & 0xff) as u8;
+            },
+            0x0e => { // MVI C,D8
+                let x = self.mem.read(self.pc + 1);
+                self.c = x;
+                self.pc += 1;
+            },
+            0x0f => { // RRC
+                let x = self.a;
+                self.a = x.rotate_right(1);
+                // If register had a bit switched on in the LSB
+                // then rotating right will have caused a carry.
+                if x & 0x01 == 1 {
+                    self.cc.cy = 1;
+                }
+            },
+            0x11 => { // LXI D,D16
+                let d = self.mem.read(self.pc + 2);
+                let e = self.mem.read(self.pc + 1);
+                self.d = d;
+                self.e = e;
+                self.pc += 2;
+            },
+            0x13 => { // INX D
+                let mut de = (self.d as u16) << 8 | (self.e as u16);
+                de += 1;
+                self.e = (de & 0xff) as u8;
+                self.d = ((de & 0xff00) >> 8) as u8;
+            },
+            0x18 => {}, // Nothing?
+            0x19 => { // DAD D
+                let de = (self.d as u32) << 8 | (self.e as u32);
+                let mut hl = (self.h as u32) << 8 | (self.l as u32);
+                hl += de;
+                // TODO: carry flag
+                self.l = (hl & 0xff) as u8;
+                self.h = ((hl & 0xff00) >> 8) as u8;
+                self.cc.cy = if (hl & 0xffff0000) != 0 { 1 } else { 0 };
+            },
+            0x1a => { // LDAX D
+                let addr = (self.d as u16) << 8 | (self.e as u16);
+                self.a = self.mem.read(addr);
+            },
+            0x1b => { // DCX D
+                let mut de = (self.d as u16) << 8 | (self.e as u16);
+                de -= 1;
+                self.e = (de & 0xff) as u8;
+                self.d = ((de & 0xff00) >> 8) as u8;
+            },
+            0x1f => { // RAR
+                // Rotates the carry bit right
+                // and combines it with the value
+                // in register A rotated right.
+                let x = self.a;
+                self.a = (self.cc.cy << 7) | (x >> 1);
+                if x & 0x01 == 1 {
+                    self.cc.cy = 1;
+                }
+            },
+            0x21 => { // LXI H,D16
+                let lo = self.mem.read(self.pc + 1);
+                let hi = self.mem.read(self.pc + 2);
+                self.l = lo;
+                self.h = hi;
+                self.pc += 2;
+            },
+            0x23 => { // INX H
+                let mut hl = (self.h as u16) << 8 | (self.l as u16);
+                hl += 1;
+                self.l = (hl & 0xff) as u8;
+                self.h = ((hl & 0xff00) >> 8) as u8;
+            },
+            0x24 => { // INR H
+                let mut h = self.h as u16;
+                h += 1;
+                self.cc.update(h);
+                self.h = (h & 0xff) as u8;
+            },
+            0x26 => { // MVI H,D8
+                let x = self.mem.read(self.pc + 1);
+                self.h = x;
+                self.pc += 1;
+            },
+            0x29 => { // DAD H
+                let mut hl = (self.h as u32) << 8 | (self.l as u32);
+                hl += hl;
+                self.l = (hl & 0xff) as u8;
+                self.h = ((hl & 0xff00) >> 8) as u8;
+                self.cc.cy = if (hl & 0xffff0000) != 0 { 1 } else { 0 };
+            },
+            0x31 => { // LXI SP,D16
+                let lo = self.mem.read(self.pc + 1);
+                let hi = self.mem.read(self.pc + 2);
+                self.sp = (hi as u16) << 8 | (lo as u16);
+                self.pc += 2;
+            },
+            0x32 => { // STA addr
+                let lo = self.mem.read(self.pc + 1);
+                let hi = self.mem.read(self.pc + 2);
+                let addr = (hi as u16) << 8 | (lo as u16);
+                self.mem.write(addr, self.a);
+                self.pc += 2;
+            },
+            0x36 => { // MVI M,D8
+                let x = self.mem.read(self.pc + 1);
+                let addr = (self.h as u16) << 8 | (self.l as u16);
+                self.mem.write(addr, x);
+                self.pc += 1;
+            },
+            0x3a => { // LDA addr
+                let lo = self.mem.read(self.pc + 1);
+                let hi = self.mem.read(self.pc + 2);
+                let addr = (hi as u16) << 8 | (lo as u16);
+                self.a = self.mem.read(addr);
+                self.pc += 2;
+            },
+            0x3e => { // MVI A,D8
+                let x = self.mem.read(self.pc + 1);
+                self.a = x;
+                self.pc += 1;
+            },
             0x41 => self.b = self.c, // MOV B,C
             0x42 => self.b = self.d, // MOV B,D
             0x43 => self.b = self.e, // MOV B,E
+            0x56 => { // MOV D,M
+                let addr = (self.h as u16) << 8 | (self.l as u16);
+                self.d = self.mem.read(addr);
+            },
+            0x5e => { // MOV E,M
+                let addr = (self.h as u16) << 8 | (self.l as u16);
+                self.e = self.mem.read(addr);
+            },
+            0x66 => { // MOV H,M
+                let addr = (self.h as u16) << 8 | (self.l as u16);
+                self.h = self.mem.read(addr);
+            },
+            0x6f => self.l = self.a, // MOV L,A
+            0x77 => { // MOV M,A
+                let addr = (self.h as u16) << 8 | (self.l as u16);
+                self.mem.write(addr, self.a);
+            },
+            0x7a => self.a = self.d, // MOV A,D
+            0x7b => self.a = self.e, // MOV A,E
+            0x7c => self.a = self.h, // MOV A,H
+            0x7e => { // MOV A,M
+                let addr = (self.h as u16) << 8 | (self.l as u16);
+                self.a = self.mem.read(addr);
+            },
             0x80 => { // ADD B
                 let result = self.a as u16 + self.b as u16;
-
                 self.cc.update(result);
-
                 // store result in register A
                 self.a = (result & 0xff) as u8;
-            }
-            _ => {}
+            },
+            0xa7 => {}, // ANA A
+            0xaf => { // XRA A
+                self.a = self.a ^ self.a;
+            },
+            0xc1 => { // POP B
+                self.b = self.mem.read(self.sp);
+                self.c = self.mem.read(self.sp + 1);
+                self.sp += 2;
+            },
+            0xc2 => { // JNZ
+                if self.cc.z == 0 {
+                    let lo = self.mem.read(self.pc + 1);
+                    let hi = self.mem.read(self.pc + 2);
+                    self.pc = (hi as u16) << 8 | (lo as u16);
+                } else {
+                    self.pc += 2;
+                }
+            },
+            0xc3 => { // JMP addr
+                let lo = self.mem.read(self.pc + 1);
+                let hi = self.mem.read(self.pc + 2);
+                self.pc = (hi as u16) << 8 | (lo as u16);
+                // Return here so we don't increment
+                // the program counter at the end of the method.
+                return;
+            },
+            0xc5 => { // PUSH B
+                self.mem.write(self.sp - 1, self.c);
+                self.mem.write(self.sp - 2, self.b);
+                self.sp -= 2;
+            },
+            0xc6 => { // ADI D8
+                let x = self.mem.read(self.pc + 1);
+                self.a += x;
+                self.cc.update(self.a as u16);
+                self.pc += 1;
+            },
+            0xc9 => { // RET
+                let lo = self.mem.read(self.sp);
+                let hi = self.mem.read(self.sp + 1);
+                self.pc = (hi as u16) << 8 | (lo as u16);
+                self.sp += 2;
+            },
+            0xcd => { // CALL addr
+                // Save return address
+                let lo = (self.pc & 0x00ff) as u8;
+                let hi = ((self.pc & 0xff00) >> 8) as u8;
+                self.mem.write(self.sp - 1, hi);
+                self.mem.write(self.sp - 2, lo);
+                let lo = self.mem.read(self.pc + 1);
+                let hi = self.mem.read(self.pc + 2);
+                self.pc = (hi as u16) << 8 | (lo as u16);
+            },
+            0xd1 => { // POP D
+                self.d = self.mem.read(self.sp);
+                self.e = self.mem.read(self.sp + 1);
+                self.sp += 2;
+            },
+            0xd3 => { // OUT D8
+                // TODO: implement
+                self.pc += 1;
+            },
+            0xd5 => { // PUSH D
+                self.mem.write(self.sp - 1, self.e);
+                self.mem.write(self.sp - 2, self.d);
+                self.sp -= 2;
+            },
+            0xe1 => { // POP H
+                self.h = self.mem.read(self.sp);
+                self.l = self.mem.read(self.sp + 1);
+                self.sp += 2;
+            },
+            0xe5 => { // PUSH H
+                self.mem.write(self.sp - 1, self.l);
+                self.mem.write(self.sp - 2, self.h);
+                self.sp -= 2;
+            },
+            0xe6 => { // ANI D8
+                let x = self.mem.read(self.pc + 1);
+                self.a = self.a & x;
+                self.pc += 1;
+            },
+            0xeb => { // XCHG
+                let d = self.d;
+                let e = self.e;
+                self.d = self.h;
+                self.e = self.l;
+                self.h = d;
+                self.l = e;
+            },
+            0xf1 => { // POP PSW
+                let x = self.mem.read(self.sp);
+                self.cc.cy = x & 0b00000001;
+                self.cc.p = (x >> 2) & 0x01;
+                self.cc.ac = (x >> 4) & 0x01;
+                self.cc.z = (x >> 6) & 0x01;
+                self.cc.s = (x >> 7) & 0x01;
+                self.a = self.mem.read(self.sp + 1);
+                self.sp += 2;
+            },
+            0xf5 => { // PUSH PSW
+                self.mem.write(self.sp - 1, self.a);
+                let mut x = 0b00000010;
+                x |= self.cc.cy;
+                x |= self.cc.p << 2;
+                x |= self.cc.ac << 4;
+                x |= self.cc.z << 6;
+                x |= self.cc.s << 7;
+                self.mem.write(self.sp - 2, x);
+            },
+            0xfb => { // EI
+                self.interrupt_enabled = true;
+            },
+            0xfe => { // CPI D8
+                let x = self.mem.read(self.pc + 1);
+                let y = self.a - x;
+                self.cc.z = if y == 0 { 1 } else { 0 };
+                self.cc.s = if y & 0x08 == 0x08 { 1 } else { 0 };
+                // TODO set parity
+                // self.cc.p = self.parity(x, 8);
+                self.cc.cy = if self.a < x { 1 } else { 0 };
+                self.pc += 1;
+            },
+            x => panic!("Unimplemented Op code: {:>0pad$x}", x, pad=2)
         }
         self.pc += 1;
     }
@@ -900,15 +1183,14 @@ fn main() {
     let mut buf = Vec::new();
     file.read_to_end(&mut buf).unwrap();
 
-    let mut machine = Machine::new();
+    let mut cpu = Cpu::new();
     for (i, byte) in buf.iter().enumerate() {
-        machine.mem.write(i as u16, byte.clone());
+        cpu.mem.write(i as u16, byte.clone());
     }
-    machine.emulate();
-    machine.emulate();
-    machine.emulate();
-    machine.emulate();
-    println!("{:?}", machine);
+
+    loop {
+        cpu.emulate();
+    }
 
     // let program = match disassemble(&buf) {
     //     nom::IResult::Done(input, output) => Program(output),
@@ -920,130 +1202,130 @@ fn main() {
 
 #[test]
 fn test_nop() {
-    let mut machine = Machine::new();
-    machine.mem.write(0, 0x00);
-    machine.emulate();
-    let mut expected = Machine::new();
+    let mut cpu = Cpu::new();
+    cpu.mem.write(0, 0x00);
+    cpu.emulate();
+    let mut expected = Cpu::new();
     expected.pc += 1;
-    assert_eq!(machine, expected);
+    assert_eq!(cpu, expected);
 }
 
 #[test]
 fn test_lxi_b() {
-    let mut machine = Machine::new();
-    machine.mem.write(0, 0x01);
-    machine.mem.write(1, 0xfe);
-    machine.mem.write(2, 0xff);
-    let mut expected = machine.clone();
+    let mut cpu = Cpu::new();
+    cpu.mem.write(0, 0x01);
+    cpu.mem.write(1, 0xfe);
+    cpu.mem.write(2, 0xff);
+    let mut expected = cpu.clone();
     expected.pc = 3;
     expected.b = 0xff;
     expected.c = 0xfe;
 
-    machine.emulate();
-    assert_eq!(machine, expected);
+    cpu.emulate();
+    assert_eq!(cpu, expected);
 }
 
 #[test]
 fn test_stax_b() {
-    let mut machine = Machine::new();
-    machine.mem.write(0, 0x02);
-    machine.mem.write(0xfffe, 0xaa);
-    machine.b = 0xfe;
-    machine.c = 0xff;
-    let mut expected = machine.clone();
+    let mut cpu = Cpu::new();
+    cpu.mem.write(0, 0x02);
+    cpu.mem.write(0xfffe, 0xaa);
+    cpu.b = 0xfe;
+    cpu.c = 0xff;
+    let mut expected = cpu.clone();
     expected.pc = 1;
     expected.b = 0xfe;
     expected.c = 0xff;
     expected.a = 0xaa;
 
-    machine.emulate();
-    assert_eq!(machine, expected);
+    cpu.emulate();
+    assert_eq!(cpu, expected);
 }
 
 #[test]
 fn test_inx_b() {
-    let mut machine = Machine::new();
-    machine.mem.write(0, 0x03);
-    machine.b = 0xfe;
-    machine.c = 0xff;
-    let mut expected = machine.clone();
+    let mut cpu = Cpu::new();
+    cpu.mem.write(0, 0x03);
+    cpu.b = 0xfe;
+    cpu.c = 0xff;
+    let mut expected = cpu.clone();
     expected.pc = 1;
     expected.b = 0xff;
     expected.c = 0xff;
 
-    machine.emulate();
-    assert_eq!(machine, expected);
+    cpu.emulate();
+    assert_eq!(cpu, expected);
 }
 
 #[test]
 fn test_inr_b() {
     //! Test increment register B
-    let mut machine = Machine::new();
-    machine.mem.write(0, 0x04);
-    machine.b = 0x01;
-    let mut expected = machine.clone();
+    let mut cpu = Cpu::new();
+    cpu.mem.write(0, 0x04);
+    cpu.b = 0x01;
+    let mut expected = cpu.clone();
     expected.pc = 1;
     expected.b = 0x02;
 
-    machine.emulate();
-    assert_eq!(machine, expected);
+    cpu.emulate();
+    assert_eq!(cpu, expected);
 }
 
 #[test]
 fn test_inr_b_carry_zero() {
     //! Test increment register B with Carry and Zero flag
-    let mut machine = Machine::new();
-    machine.mem.write(0, 0x04);
-    machine.b = 0xff;
-    let mut expected = machine.clone();
+    let mut cpu = Cpu::new();
+    cpu.mem.write(0, 0x04);
+    cpu.b = 0xff;
+    let mut expected = cpu.clone();
     expected.pc = 1;
     expected.b = 0x00;
     expected.cc.z = 1;
     expected.cc.cy = 1;
 
-    machine.emulate();
-    assert_eq!(machine, expected);
+    cpu.emulate();
+    assert_eq!(cpu, expected);
 }
 
 #[test]
 fn test_dcr_b() {
     //! Test decrement register B
-    let mut machine = Machine::new();
-    machine.mem.write(0, 0x05);
-    machine.b = 0x02;
-    let mut expected = machine.clone();
+    let mut cpu = Cpu::new();
+    cpu.mem.write(0, 0x05);
+    cpu.b = 0x02;
+    let mut expected = cpu.clone();
     expected.pc = 1;
     expected.b = 0x01;
 
-    machine.emulate();
-    assert_eq!(machine, expected);
+    cpu.emulate();
+    assert_eq!(cpu, expected);
 }
 
 #[test]
 fn test_dcr_b_zero() {
     //! Test decrement register B with Zero flag
-    let mut machine = Machine::new();
-    machine.mem.write(0, 0x05);
-    machine.b = 0x01;
-    let mut expected = machine.clone();
+    let mut cpu = Cpu::new();
+    cpu.mem.write(0, 0x05);
+    cpu.b = 0x01;
+    let mut expected = cpu.clone();
     expected.pc = 1;
     expected.b = 0x00;
     expected.cc.z = 1;
 
-    machine.emulate();
-    assert_eq!(machine, expected);
+    cpu.emulate();
+    assert_eq!(cpu, expected);
 }
 
 #[test]
 fn test_mvi_b() {
     //! Test move immediate word to register B
-    let mut machine = Machine::new();
-    machine.mem.write(0, 0x06);
-    machine.mem.write(1, 0xee);
-    let mut expected = machine.clone();
+    let mut cpu = Cpu::new();
+    cpu.mem.write(0, 0x06);
+    cpu.mem.write(1, 0xee);
+    let mut expected = cpu.clone();
     expected.pc = 2;
     expected.b = 0xee;
 
-    machine.emulate();
-    assert_eq!(machine, expected);
+    cpu.emulate();
+    assert_eq!(cpu, expected);
 }
