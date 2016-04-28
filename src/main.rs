@@ -770,9 +770,8 @@ impl ConditionCodes {
         self.s = if x & 0x80 > 0 { 1 } else { 0 };
         // Carry flag
         self.cy = if x > 0xff { 1 } else { 0 };               
-
-        // TODO: Parity flag
-        // self.p = parity(x & 0xff);
+        // Parity flag
+        self.p = parity((x & 0xff) as u8, 8);
     }
 }
 
@@ -800,6 +799,23 @@ impl Memory {
     pub fn write(&mut self, i: u16, d: u8) {
         let Memory(ref mut mem) = *self;
         mem[i as usize] = d;
+    }
+}
+
+fn parity(x: u8, size: u8) -> u8 {
+    let mut p = 0;
+    let mut x = x & ((1 << size) - 1);
+    for _ in 0..size {
+        if (x & 0x1) > 0 {
+            p += 1;
+        }
+        x = x >> 1;
+    }
+
+    if (p & 0x1) == 0 {
+        1
+    } else {
+        0
     }
 }
 
@@ -845,32 +861,31 @@ impl Cpu {
     /// by PC and execute the OpCode given by that byte.
     pub fn emulate(&mut self) {
         let op = self.mem.read(self.pc);
+        println!("pc: {:>0padpc$x}, op: {:>0padop$x}", self.pc, op, padpc=4, padop=2);
         match op {
             0x00 => {}, // NOP
-            0x01 => {
+            0x01 => { // LXI B,word
                 self.c = self.mem.read(self.pc + 1);
                 self.b = self.mem.read(self.pc + 2);
                 self.pc += 2;
-            }, // LXI B,word
+            },
             0x02 => { // STAX B
                 let addr = (self.c as u16) << 8 | (self.b as u16);
                 self.a = self.mem.read(addr);
             },
             0x03 => { // INX B
-                let mut bc = (self.c as u16) << 8 | (self.b as u16);
-                bc += 1;
+                let bc = (self.c as u16) << 8 | (self.b as u16);
+                let bc = bc.wrapping_add(1);
                 self.b = (bc & 0xff) as u8;
                 self.c = ((bc & 0xff00) >> 8) as u8;
             },
             0x04 => { // INR B
-                let mut b = self.b as u16;
-                b += 1;
+                let b = (self.b as u16).wrapping_add(1);
                 self.cc.update(b);
                 self.b = (b & 0xff) as u8;
             },
             0x05 => { // DCR B
-                let mut b = self.b as u16;
-                b -= 1;
+                let b = (self.b as u16).wrapping_sub(1);
                 self.cc.update(b);
                 self.b = (b & 0xff) as u8;
             },
@@ -881,15 +896,15 @@ impl Cpu {
             },
             0x09 => { // DAD B
                 let bc = (self.b as u32) << 8 | (self.c as u32);
-                let mut hl = (self.h as u32) << 8 | (self.l as u32);
-                hl += bc;
+                let hl = (self.h as u32) << 8 | (self.l as u32);
+                let hl = hl.wrapping_add(bc);
                 self.l = (hl & 0xff) as u8;
                 self.h = ((hl & 0xff00) >> 8) as u8;
                 self.cc.cy = if (hl & 0xffff0000) > 0 { 1 } else { 0 };
             },
             0x0d => { // DCR C
                 let mut c = self.c as u16;
-                c -= 1;
+                let c = (self.c as u16).wrapping_sub(1);
                 self.cc.update(c);
                 self.c = (c & 0xff) as u8;
             },
@@ -916,15 +931,15 @@ impl Cpu {
             },
             0x13 => { // INX D
                 let mut de = (self.d as u16) << 8 | (self.e as u16);
-                de += 1;
+                let de = de.wrapping_add(1);
                 self.e = (de & 0xff) as u8;
                 self.d = ((de & 0xff00) >> 8) as u8;
             },
             0x18 => {}, // Nothing?
             0x19 => { // DAD D
                 let de = (self.d as u32) << 8 | (self.e as u32);
-                let mut hl = (self.h as u32) << 8 | (self.l as u32);
-                hl += de;
+                let hl = (self.h as u32) << 8 | (self.l as u32);
+                let hl = hl.wrapping_add(de);
                 self.l = (hl & 0xff) as u8;
                 self.h = ((hl & 0xff00) >> 8) as u8;
                 self.cc.cy = if (hl & 0xffff0000) != 0 { 1 } else { 0 };
@@ -934,8 +949,8 @@ impl Cpu {
                 self.a = self.mem.read(addr);
             },
             0x1b => { // DCX D
-                let mut de = (self.d as u16) << 8 | (self.e as u16);
-                de -= 1;
+                let de = (self.d as u16) << 8 | (self.e as u16);
+                let de = de.wrapping_sub(1);
                 self.e = (de & 0xff) as u8;
                 self.d = ((de & 0xff00) >> 8) as u8;
             },
@@ -957,14 +972,13 @@ impl Cpu {
                 self.pc += 2;
             },
             0x23 => { // INX H
-                let mut hl = (self.h as u16) << 8 | (self.l as u16);
-                hl += 1;
+                let hl = (self.h as u16) << 8 | (self.l as u16);
+                let hl = hl.wrapping_add(1);
                 self.l = (hl & 0xff) as u8;
                 self.h = ((hl & 0xff00) >> 8) as u8;
             },
             0x24 => { // INR H
-                let mut h = self.h as u16;
-                h += 1;
+                let h = (self.h as u16).wrapping_add(1);
                 self.cc.update(h);
                 self.h = (h & 0xff) as u8;
             },
@@ -974,8 +988,8 @@ impl Cpu {
                 self.pc += 1;
             },
             0x29 => { // DAD H
-                let mut hl = (self.h as u32) << 8 | (self.l as u32);
-                hl += hl;
+                let hl = (self.h as u32) << 8 | (self.l as u32);
+                let hl = hl.wrapping_add(hl);
                 self.l = (hl & 0xff) as u8;
                 self.h = ((hl & 0xff00) >> 8) as u8;
                 self.cc.cy = if (hl & 0xffff0000) != 0 { 1 } else { 0 };
@@ -1050,7 +1064,7 @@ impl Cpu {
                 self.cc.ac = 0;
                 self.cc.z = if self.a == 0 { 1 } else { 0 };
                 self.cc.s = if (self.a & 0x80) == 0x80 { 1 } else { 0 };
-                // self.cc.p = parity(self.a, 8);
+                self.cc.p = parity(self.a, 8);
             },
             0xaf => { // XRA A
                 self.a = self.a ^ self.a;
@@ -1058,7 +1072,7 @@ impl Cpu {
                 self.cc.ac = 0;
                 self.cc.z = if self.a == 0 { 1 } else { 0 };
                 self.cc.s = if (self.a & 0x80) == 0x80 { 1 } else { 0 };
-                // self.cc.p = parity(self.a, 8);
+                self.cc.p = parity(self.a, 8);
             },
             0xc1 => { // POP B
                 self.c = self.mem.read(self.sp);
@@ -1166,13 +1180,13 @@ impl Cpu {
             },
             0xf5 => { // PUSH PSW
                 self.mem.write(self.sp - 1, self.a);
-                let mut x = 0b00000010;
-                x |= self.cc.cy;
-                x |= self.cc.p << 2;
-                x |= self.cc.ac << 4;
-                x |= self.cc.z << 6;
-                x |= self.cc.s << 7;
-                self.mem.write(self.sp - 2, x);
+                let mut psw = 0b00000010;
+                psw |= self.cc.cy;
+                psw |= self.cc.p << 2;
+                psw |= self.cc.ac << 4;
+                psw |= self.cc.z << 6;
+                psw |= self.cc.s << 7;
+                self.mem.write(self.sp - 2, psw);
                 self.sp -= 2;
             },
             0xfb => { // EI
@@ -1183,8 +1197,7 @@ impl Cpu {
                 let y = self.a - x;
                 self.cc.z = if y == 0 { 1 } else { 0 };
                 self.cc.s = if y & 0x08 == 0x08 { 1 } else { 0 };
-                // TODO set parity
-                // self.cc.p = self.parity(x, 8);
+                self.cc.p = parity(x, 8);
                 self.cc.cy = if self.a < x { 1 } else { 0 };
                 self.pc += 1;
             },
@@ -1203,9 +1216,11 @@ fn main() {
     let mut buf = Vec::new();
     file.read_to_end(&mut buf).unwrap();
 
+    let offset = 0;
+
     let mut cpu = Cpu::new();
     for (i, byte) in buf.iter().enumerate() {
-        cpu.mem.write(i as u16, byte.clone());
+        cpu.mem.write(i as u16 + offset, byte.clone());
     }
 
     loop {
