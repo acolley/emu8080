@@ -742,10 +742,10 @@ fn get_opts() -> Options {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ConditionCodes {
-    z: u8,
-    s: u8,
-    p: u8,
-    cy: u8,
+    z: u8, // Zero
+    s: u8, // Sign
+    p: u8, // Parity
+    cy: u8, // Carry
     ac: u8,
     pad: u8,
 }
@@ -769,7 +769,7 @@ impl ConditionCodes {
         // Sign flag: if bit 7 is set, set the flag, else clear.
         self.s = if x & 0x80 > 0 { 1 } else { 0 };
         // Carry flag
-        self.cy = if x > 0xff { 1 } else { 0 };                
+        self.cy = if x > 0xff { 1 } else { 0 };               
 
         // TODO: Parity flag
         // self.p = parity(x & 0xff);
@@ -925,7 +925,6 @@ impl Cpu {
                 let de = (self.d as u32) << 8 | (self.e as u32);
                 let mut hl = (self.h as u32) << 8 | (self.l as u32);
                 hl += de;
-                // TODO: carry flag
                 self.l = (hl & 0xff) as u8;
                 self.h = ((hl & 0xff00) >> 8) as u8;
                 self.cc.cy = if (hl & 0xffff0000) != 0 { 1 } else { 0 };
@@ -943,7 +942,7 @@ impl Cpu {
             0x1f => { // RAR
                 // Rotates the carry bit right
                 // and combines it with the value
-                // in register A rotated right.
+                // in register A as MSB.
                 let x = self.a;
                 self.a = (self.cc.cy << 7) | (x >> 1);
                 if x & 0x01 == 1 {
@@ -1045,13 +1044,25 @@ impl Cpu {
                 // store result in register A
                 self.a = (result & 0xff) as u8;
             },
-            0xa7 => {}, // ANA A
+            0xa7 => { // ANA A
+                self.a = self.a & self.a;
+                self.cc.cy = 0;
+                self.cc.ac = 0;
+                self.cc.z = if self.a == 0 { 1 } else { 0 };
+                self.cc.s = if (self.a & 0x80) == 0x80 { 1 } else { 0 };
+                // self.cc.p = parity(self.a, 8);
+            },
             0xaf => { // XRA A
                 self.a = self.a ^ self.a;
+                self.cc.cy = 0;
+                self.cc.ac = 0;
+                self.cc.z = if self.a == 0 { 1 } else { 0 };
+                self.cc.s = if (self.a & 0x80) == 0x80 { 1 } else { 0 };
+                // self.cc.p = parity(self.a, 8);
             },
             0xc1 => { // POP B
-                self.b = self.mem.read(self.sp);
-                self.c = self.mem.read(self.sp + 1);
+                self.c = self.mem.read(self.sp);
+                self.b = self.mem.read(self.sp + 1);
                 self.sp += 2;
             },
             0xc2 => { // JNZ
@@ -1059,6 +1070,7 @@ impl Cpu {
                     let lo = self.mem.read(self.pc + 1);
                     let hi = self.mem.read(self.pc + 2);
                     self.pc = (hi as u16) << 8 | (lo as u16);
+                    return;
                 } else {
                     self.pc += 2;
                 }
@@ -1072,14 +1084,14 @@ impl Cpu {
                 return;
             },
             0xc5 => { // PUSH B
-                self.mem.write(self.sp - 1, self.c);
-                self.mem.write(self.sp - 2, self.b);
+                self.mem.write(self.sp - 1, self.b);
+                self.mem.write(self.sp - 2, self.c);
                 self.sp -= 2;
             },
             0xc6 => { // ADI D8
-                let x = self.mem.read(self.pc + 1);
-                self.a += x;
-                self.cc.update(self.a as u16);
+                let x = (self.a as u16) + self.mem.read(self.pc + 1) as u16;
+                self.cc.update(x);
+                self.a = x as u8;
                 self.pc += 1;
             },
             0xc9 => { // RET
@@ -1087,20 +1099,23 @@ impl Cpu {
                 let hi = self.mem.read(self.sp + 1);
                 self.pc = (hi as u16) << 8 | (lo as u16);
                 self.sp += 2;
+                return;
             },
             0xcd => { // CALL addr
                 // Save return address
-                let lo = (self.pc & 0x00ff) as u8;
-                let hi = ((self.pc & 0xff00) >> 8) as u8;
+                let ret = self.pc + 2;
+                let lo = (ret & 0x00ff) as u8;
+                let hi = ((ret & 0xff00) >> 8) as u8;
                 self.mem.write(self.sp - 1, hi);
                 self.mem.write(self.sp - 2, lo);
                 let lo = self.mem.read(self.pc + 1);
                 let hi = self.mem.read(self.pc + 2);
                 self.pc = (hi as u16) << 8 | (lo as u16);
+                return;
             },
             0xd1 => { // POP D
-                self.d = self.mem.read(self.sp);
-                self.e = self.mem.read(self.sp + 1);
+                self.e = self.mem.read(self.sp);
+                self.d = self.mem.read(self.sp + 1);
                 self.sp += 2;
             },
             0xd3 => { // OUT D8
@@ -1108,23 +1123,27 @@ impl Cpu {
                 self.pc += 1;
             },
             0xd5 => { // PUSH D
-                self.mem.write(self.sp - 1, self.e);
-                self.mem.write(self.sp - 2, self.d);
+                self.mem.write(self.sp - 1, self.d);
+                self.mem.write(self.sp - 2, self.e);
                 self.sp -= 2;
             },
             0xe1 => { // POP H
-                self.h = self.mem.read(self.sp);
-                self.l = self.mem.read(self.sp + 1);
+                self.l = self.mem.read(self.sp);
+                self.h = self.mem.read(self.sp + 1);
                 self.sp += 2;
             },
             0xe5 => { // PUSH H
-                self.mem.write(self.sp - 1, self.l);
-                self.mem.write(self.sp - 2, self.h);
+                self.mem.write(self.sp - 1, self.h);
+                self.mem.write(self.sp - 2, self.l);
                 self.sp -= 2;
             },
             0xe6 => { // ANI D8
                 let x = self.mem.read(self.pc + 1);
                 self.a = self.a & x;
+                self.cc.cy = 0;
+                self.cc.ac = 0;
+                self.cc.z = if self.a == 0 { 1 } else { 0 };
+                self.cc.s = if (self.a & 0x80) == 0x80 { 1 } else { 0 };
                 self.pc += 1;
             },
             0xeb => { // XCHG
@@ -1154,6 +1173,7 @@ impl Cpu {
                 x |= self.cc.z << 6;
                 x |= self.cc.s << 7;
                 self.mem.write(self.sp - 2, x);
+                self.sp -= 2;
             },
             0xfb => { // EI
                 self.interrupt_enabled = true;
