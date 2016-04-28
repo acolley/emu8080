@@ -804,12 +804,12 @@ impl Memory {
 
 fn parity(x: u8, size: u8) -> u8 {
     let mut p = 0;
-    let mut x = x & ((1 << size) - 1);
+    let mut x = x & ((1u8.wrapping_shl(size as u32)) - 1);
     for _ in 0..size {
         if (x & 0x1) > 0 {
             p += 1;
         }
-        x = x >> 1;
+        x = x.wrapping_shr(1);
     }
 
     if (p & 0x1) == 0 {
