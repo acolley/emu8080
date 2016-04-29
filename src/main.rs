@@ -1418,13 +1418,14 @@ impl Cpu {
             },
             0xcd => { // CALL addr
                 // Save return address
-                let ret = self.pc + 2;
+                let ret = self.pc + 3;
                 let lo = (ret & 0x00ff) as u8;
                 let hi = ((ret & 0xff00) >> 8) as u8;
                 self.mem.write(self.sp - 1, hi);
                 self.mem.write(self.sp - 2, lo);
                 let lo = self.mem.read(self.pc + 1);
                 let hi = self.mem.read(self.pc + 2);
+                self.sp -= 2;
                 self.pc = (hi as u16) << 8 | (lo as u16);
                 return;
             },
@@ -1495,7 +1496,7 @@ impl Cpu {
             },
             0xfe => { // CPI D8
                 let x = self.mem.read(self.pc + 1);
-                let y = self.a - x;
+                let y = self.a.wrapping_sub(x);
                 self.cc.z = if y == 0 { 1 } else { 0 };
                 self.cc.s = if y & 0x08 == 0x08 { 1 } else { 0 };
                 self.cc.p = parity(x, 8);
@@ -1517,18 +1518,22 @@ fn main() {
     let mut buf = Vec::new();
     file.read_to_end(&mut buf).unwrap();
 
-    // let offset = 0;
+    let offset = 0;
 
-    // let mut cpu = Cpu::new();
-    // for (i, byte) in buf.iter().enumerate() {
-    //     cpu.mem.write(i as u16 + offset, byte.clone());
-    // }
+    let mut cpu = Cpu::new();
+    for (i, byte) in buf.iter().enumerate() {
+        cpu.mem.write(i as u16 + offset, byte.clone());
+    }
 
-    // loop {
-    //     cpu.emulate();
-    // }
+    let mut i = 0usize;
+    loop {
+        print!("{}: ", i);
+        cpu.emulate();
+        i += 1;
+        ::std::thread::sleep(::std::time::Duration::from_millis(10));
+    }
 
-    dis(&buf);
+    // dis(&buf);
 
     // let program = match disassemble(&buf) {
     //     nom::IResult::Done(input, output) => Program(output),
