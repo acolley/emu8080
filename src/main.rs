@@ -761,18 +761,6 @@ impl ConditionCodes {
             pad: 0x00,
         }
     }
-
-    #[inline(always)]
-    pub fn update(&mut self, x: u16) {
-        // If x is zero, set zero flag to 1, else 0.
-        self.z = if x & 0xff == 0 { 1 } else { 0 };
-        // Sign flag: if bit 7 is set, set the flag, else clear.
-        self.s = if x & 0x80 > 0 { 1 } else { 0 };
-        // Carry flag
-        self.cy = if x > 0xff { 1 } else { 0 };               
-        // Parity flag
-        self.p = parity((x & 0xff) as u8, 8);
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -880,14 +868,18 @@ impl Cpu {
                 self.c = ((bc & 0xff00) >> 8) as u8;
             },
             0x04 => { // INR B
-                let b = (self.b as u16).wrapping_add(1);
-                self.cc.update(b);
-                self.b = (b & 0xff) as u8;
+                let b = self.b.wrapping_add(1);
+                self.cc.z = if b == 0 { 1 } else { 0 };
+                self.cc.s = if (b & 0x80) == 0x80 { 1 } else { 0 };
+                self.cc.p = parity(b, 8);
+                self.b = b;
             },
             0x05 => { // DCR B
-                let b = (self.b as u16).wrapping_sub(1);
-                self.cc.update(b);
-                self.b = (b & 0xff) as u8;
+                let b = self.b.wrapping_sub(1);
+                self.cc.z = if b == 0 { 1 } else { 0 };
+                self.cc.s = if (b & 0x80) == 0x80 { 1 } else { 0 };
+                self.cc.p = parity(b, 8);
+                self.b = b;
             },
             0x06 => {
                 let x = self.mem.read(self.pc + 1);
@@ -903,10 +895,11 @@ impl Cpu {
                 self.cc.cy = if (hl & 0xffff0000) > 0 { 1 } else { 0 };
             },
             0x0d => { // DCR C
-                let mut c = self.c as u16;
-                let c = (self.c as u16).wrapping_sub(1);
-                self.cc.update(c);
-                self.c = (c & 0xff) as u8;
+                let c = self.c.wrapping_sub(1);
+                self.cc.z = if c == 0 { 1 } else { 0 };
+                self.cc.s = if (c & 0x80) == 0x80 { 1 } else { 0 };
+                self.cc.p = parity(c, 8);
+                self.c = c;
             },
             0x0e => { // MVI C,D8
                 let x = self.mem.read(self.pc + 1);
@@ -930,7 +923,7 @@ impl Cpu {
                 self.pc += 2;
             },
             0x13 => { // INX D
-                let mut de = (self.d as u16) << 8 | (self.e as u16);
+                let de = (self.d as u16) << 8 | (self.e as u16);
                 let de = de.wrapping_add(1);
                 self.e = (de & 0xff) as u8;
                 self.d = ((de & 0xff00) >> 8) as u8;
@@ -978,9 +971,11 @@ impl Cpu {
                 self.h = ((hl & 0xff00) >> 8) as u8;
             },
             0x24 => { // INR H
-                let h = (self.h as u16).wrapping_add(1);
-                self.cc.update(h);
-                self.h = (h & 0xff) as u8;
+                let h = self.h.wrapping_add(1);
+                self.cc.z = if h == 0 { 1 } else { 0 };
+                self.cc.s = if (h & 0x80) == 0x80 { 1 } else { 0 };
+                self.cc.p = parity(h, 8);
+                self.h = h;
             },
             0x26 => { // MVI H,D8
                 let x = self.mem.read(self.pc + 1);
@@ -1052,12 +1047,12 @@ impl Cpu {
                 let addr = (self.h as u16) << 8 | (self.l as u16);
                 self.a = self.mem.read(addr);
             },
-            0x80 => { // ADD B
-                let result = self.a as u16 + self.b as u16;
-                self.cc.update(result);
-                // store result in register A
-                self.a = (result & 0xff) as u8;
-            },
+            // 0x80 => { // ADD B
+            //     let result = self.a as u16 + self.b as u16;
+            //     self.cc.update(result);
+            //     // store result in register A
+            //     self.a = (result & 0xff) as u8;
+            // },
             0xa7 => { // ANA A
                 self.a = self.a & self.a;
                 self.cc.cy = 0;
@@ -1104,7 +1099,14 @@ impl Cpu {
             },
             0xc6 => { // ADI D8
                 let x = (self.a as u16) + self.mem.read(self.pc + 1) as u16;
-                self.cc.update(x);
+                // If x is zero, set zero flag to 1, else 0.
+                self.cc.z = if x & 0xff == 0 { 1 } else { 0 };
+                // Sign flag: if bit 7 is set, set the flag, else clear.
+                self.cc.s = if x & 0x80 > 0 { 1 } else { 0 };
+                // Carry flag
+                self.cc.cy = if x > 0xff { 1 } else { 0 };               
+                // Parity flag
+                self.cc.p = parity((x & 0xff) as u8, 8);
                 self.a = x as u8;
                 self.pc += 1;
             },
