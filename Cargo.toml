@@ -6,3 +6,4 @@ authors = ["acolley <alnessy@hotmail.com>"]
 [dependencies]
 clap = "2.3.0"
 nom = "1.2.2"
+time = "0.1.35"

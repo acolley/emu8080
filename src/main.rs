@@ -3,6 +3,7 @@
 extern crate clap;
 #[macro_use]
 extern crate nom;
+extern crate time;
 
 use std::fs::File;
 use std::io;
@@ -1167,7 +1168,7 @@ impl Cpu {
     /// by PC and execute the OpCode given by that byte.
     /// Return the number of clock cycles used by that op.
     #[inline(always)]
-    pub fn emulate(&mut self) -> usize {
+    pub fn step(&mut self) -> u32 {
         let op = self.mem.read(self.pc);
         println!("pc: {:>0padpc$x}, op: {:>0padop$x}", self.pc, op, padpc=4, padop=2);
         let cycles = match op {
@@ -1352,6 +1353,13 @@ impl Cpu {
                 self.pc += 1;
                 10
             },
+            // 0x39 => { // DAD SP
+            //     let hl = (self.h as u32) << 8 | (self.l as u32);
+            //     let sp = (self.sp as u32).wrapping_add(hl);
+            //     self.sp = (sp & 0x0000ffff) as u16;
+            //     self.cc.cy = if (sp & 0xffff0000) != 0 { 1 } else { 0 };
+            //     10
+            // },
             0x3a => { // LDA addr
                 let lo = self.mem.read(self.pc + 1);
                 let hi = self.mem.read(self.pc + 2);
@@ -1635,7 +1643,7 @@ impl SpaceInvadersMachine {
     /// Returns the number of clock cycles
     /// required for the instruction processed.
     #[inline(always)]
-    pub fn emulate(&mut self) -> usize {
+    pub fn step(&mut self) -> u32 {
         let op = self.cpu.mem.read(self.cpu.pc);
         match op {
             0xd3 => { // OUT D8
@@ -1650,7 +1658,7 @@ impl SpaceInvadersMachine {
                     },
                     _ => {}
                 }
-                self.cpu.pc += 1;
+                self.cpu.pc += 2;
                 10
             },
             0xdb => { // IN D8
@@ -1659,16 +1667,16 @@ impl SpaceInvadersMachine {
                     let value = (self.shifty as u16) << 8 | self.shiftx as u16;
                     self.cpu.a = ((value >> (8 - self.shift_offset)) & 0xff) as u8;
                 }
-                // self.cpu.a = self.cpu.ports[port as usize];
-                self.cpu.pc += 1;
+                self.cpu.pc += 2;
                 10
             },
-            _ => self.cpu.emulate()
+            _ => self.cpu.step()
         }
     }
 
     #[inline(always)]
     pub fn interrupt(&mut self, int: usize) {
+        // TODO: interrupt code should be an enum?
         // PUSH PC
         let hi = ((self.cpu.pc & 0xff00) >> 8) as u8;
         let lo = (self.cpu.pc & 0xff) as u8;
@@ -1676,6 +1684,43 @@ impl SpaceInvadersMachine {
         // Set PC to low memory vector
         // This is identical to a an `RST int` instruction
         self.cpu.pc = (8 * int) as u16;
+    }
+
+    pub fn run(&mut self) {
+        let mut current = time::precise_time_ns();
+        let mut old = current;
+        let mut i = 0usize;
+
+        let mut last_interrupt = current;
+
+        let sixtieth_of_second = ((1.0f64 / 60.0f64) * 1_000_000_000.0) as u64;
+
+        // Nanoseconds per cycle
+        let ns_per_cycle = ((1.0 / (self.cpu.speed as f64)) * 1_000_000_000.0) as u32;
+
+        loop {
+            print!("{}: ", i);
+            let cycles = self.step();
+
+            i += 1;
+
+            old = current;
+            current = time::precise_time_ns();
+
+            if self.cpu.interrupt_enabled && current - last_interrupt >= sixtieth_of_second {
+                // VBlank interrupt
+                // self.interrupt(2);
+                last_interrupt = current;
+            }
+
+            // Actual time taken to run operation.
+            let diff = (current - old) as i32;
+            // Emulated time to wait given the CPU runs at a particular clock rate.
+            let wait = ((ns_per_cycle * cycles) as i32) - diff;
+            if wait > 0 {
+                ::std::thread::sleep(::std::time::Duration::new(0, ns_per_cycle * cycles));
+            }
+        }
     }
 }
 
@@ -1686,14 +1731,15 @@ fn main() {
     file.read_to_end(&mut buf).unwrap();
 
     let mut machine = SpaceInvadersMachine::new(&buf);
+    machine.run();
 
-    let mut i = 0usize;
-    loop {
-        print!("{}: ", i);
-        machine.emulate();
-        i += 1;
-        ::std::thread::sleep(::std::time::Duration::from_millis(10));
-    }
+    // let mut i = 0usize;
+    // loop {
+    //     print!("{}: ", i);
+    //     machine.step();
+    //     i += 1;
+    //     ::std::thread::sleep(::std::time::Duration::from_millis(10));
+    // }
 
     // dis(&buf);
 
