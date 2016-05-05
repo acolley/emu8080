@@ -1965,9 +1965,9 @@ impl SpaceInvadersMachine {
                 let byte = self.cpu.mem.read(0x2400 + (offset as u16));
                 let p = y % 8;
                 if byte & (1 << p) != 0 {
-                    row.push(0xff);
+                    row.push(0x0f);
                 } else {
-                    row.push(0x00);
+                    row.push(0xf0);
                 }
             }
             pixels.push(row);
