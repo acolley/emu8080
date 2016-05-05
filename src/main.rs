@@ -1,6 +1,9 @@
 #![feature(slice_patterns)]
+#![feature(step_by)]
 
 extern crate clap;
+#[macro_use]
+extern crate glium;
 #[macro_use]
 extern crate nom;
 extern crate time;
@@ -11,6 +14,15 @@ use std::io::{Read, Write};
 use std::u8;
 
 use clap::{Arg, App};
+
+use glium::{DisplayBuild, Program, Rect, Surface};
+use glium::backend::glutin_backend::GlutinFacade;
+use glium::glutin;
+use glium::glutin::ElementState::Pressed;
+use glium::glutin::Event;
+use glium::glutin::VirtualKeyCode;
+use glium::index::PrimitiveType;
+use glium::texture::{MipmapsOption, Texture2dDataSource, UncompressedFloatFormat};
 
 #[derive(Debug)]
 struct Addr(u8, u8);
@@ -277,20 +289,20 @@ impl ::std::fmt::Display for Op {
     }
 }
 
-struct Program(Vec<Op>);
+struct Binary(Vec<Op>);
 
-// impl ::std::fmt::Display for Program {
+// impl ::std::fmt::Display for Binary {
 //     fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
-//         let Program(ref ops) = *self;
+//         let Binary(ref ops) = *self;
 //         for (i, op) in ops.iter().enumerate() {
 //             write!(f, "{:>0pad$x} {}\n", i, op, pad=4)
 //         }
 //     }
 // }
 
-impl Program {
+impl Binary {
     pub fn write<W: Write>(&self, writer: &mut W) {
-        let &Program(ref ops) = self;
+        let &Binary(ref ops) = self;
         for (i, op) in ops.iter().enumerate() {
             writer.write(&format!("{:>0pad$x} {}\n", i, op, pad=4).into_bytes()).unwrap();
         }
@@ -1170,7 +1182,7 @@ impl Cpu {
     #[inline(always)]
     pub fn step(&mut self) -> u32 {
         let op = self.mem.read(self.pc);
-        println!("pc: {:>0padpc$x}, op: {:>0padop$x}", self.pc, op, padpc=4, padop=2);
+        // println!("pc: {:>0padpc$x}, op: {:>0padop$x}", self.pc, op, padpc=4, padop=2);
         let cycles = match op {
             0x00 => { 4 }, // NOP
             0x01 => { // LXI B,word
@@ -1222,6 +1234,11 @@ impl Cpu {
                 self.cc.cy = if (hl & 0xffff0000) > 0 { 1 } else { 0 };
                 10
             },
+            0x0a => { // LDAX B
+                let addr = (self.b as u16) << 8 | (self.c as u16);
+                self.a = self.mem.read(addr);
+                7
+            },
             0x0d => { // DCR C
                 let c = self.c.wrapping_sub(1);
                 self.cc.z = if c == 0 { 1 } else { 0 };
@@ -1237,11 +1254,10 @@ impl Cpu {
                 7
             },
             0x0f => { // RRC
-                let x = self.a;
-                self.a = x.rotate_right(1);
+                self.a = self.a.rotate_right(1);
                 // If register had a bit switched on in the LSB
                 // then rotating right will have caused a carry.
-                if x & 0x01 == 1 {
+                if self.a & 0x01 == 1 {
                     self.cc.cy = 1;
                 }
                 4
@@ -1323,6 +1339,29 @@ impl Cpu {
                 self.pc += 1;
                 7
             },
+            0x27 => { // DAA
+                // The eight-bit number in the accumulator is adjusted 
+                // to form two four-bit Binary-Coded-Decimal digits 
+                // by the following Process:
+                // 1. If the value of the least significant 4 bits of the 
+                // accumulator is greater than 9 OR if the AC flag is set, 
+                // 6 is added to the accumulator.
+                // 2. If the value of the most significant 4 bits of the 
+                // accumulator is now greater than 9, or if the CY flag is set, 
+                // 6 is added to the most significant 4 bits of the accumulator.
+                if self.a & 0xf > 9 {
+                    self.a += 9;
+                }
+                if self.a & 0xf0 > 0x90 {
+                    let res = (self.a as u16) + 0x60;
+                    self.a = res as u8;
+                    self.cc.cy = if res > 0xff { 1 } else { 0 };
+                    self.cc.z = if (res & 0xff) == 0 { 1 } else { 0 };
+                    self.cc.s = if (res & 0x80) == 0x80 { 1 } else { 0 };
+                    self.cc.p = parity(res as u8, 8);
+                }
+                4
+            },
             0x29 => { // DAD H
                 let hl = (self.h as u32) << 8 | (self.l as u32);
                 let hl = hl.wrapping_add(hl);
@@ -1361,6 +1400,10 @@ impl Cpu {
                 self.mem.write(addr, x);
                 self.pc += 1;
                 10
+            },
+            0x37 => { // STC
+                self.cc.cy = 1;
+                4
             },
             0x39 => { // DAD SP
                 let hl = (self.h as u32) << 8 | (self.l as u32);
@@ -1408,10 +1451,18 @@ impl Cpu {
                 self.d = self.mem.read(addr);
                 7
             },
+            0x57 => { // MOV D,A
+                self.d = self.a;
+                5
+            },
             0x5e => { // MOV E,M
                 let addr = (self.h as u16) << 8 | (self.l as u16);
                 self.e = self.mem.read(addr);
                 7
+            },
+            0x5f => { // MOV E,A
+                self.e = self.a;
+                5
             },
             0x66 => { // MOV H,M
                 let addr = (self.h as u16) << 8 | (self.l as u16);
@@ -1691,21 +1742,162 @@ impl Cpu {
     // This will allow the enforcement of a maximum memory size.
 }
 
+#[derive(Copy, Clone)]
+struct Vertex {
+    position: [f32; 2],
+    tex_coords: [f32; 2],
+}
+
+implement_vertex!(Vertex, position, tex_coords);
+
+const WIDTH: u32 = 224;
+const HEIGHT: u32 = 256;
+
+/// Space Invaders, (C) Taito 1978, Midway 1979
+///
+/// CPU: Intel 8080 @ 2MHz (CPU similar to the (newer) Zilog Z80)    
+///
+/// Interrupts: $cf (RST 8) at the start of vblank, $d7 (RST $10) at the end of vblank.    
+///
+/// Video: 256(x)*224(y) @ 60Hz, vertical monitor. Colours are simulated with a    
+/// plastic transparent overlay and a background picture.    
+/// Video hardware is very simple: 7168 bytes 1bpp bitmap (32 bytes per scanline).    
+///
+/// Sound: SN76477 and samples.    
+///
+/// Memory map:    
+/// ROM    
+/// $0000-$07ff:    invaders.h
+/// $0800-$0fff:    invaders.g
+/// $1000-$17ff:    invaders.f
+/// $1800-$1fff:    invaders.e
+///
+/// RAM    
+/// $2000-$23ff:    work RAM
+/// $2400-$3fff:    video RAM
+///
+/// $4000-:     RAM mirror
 struct SpaceInvadersMachine {
     cpu: Cpu,
     shiftx: u8,
     shifty: u8,
     shift_offset: u8,
+    window: GlutinFacade,
+    program: Program,
+    texture: glium::texture::Texture2d,
+    vertex_buffer: glium::VertexBuffer<Vertex>,
+    index_buffer: glium::IndexBuffer<u16>,
 }
 
 impl SpaceInvadersMachine {
     pub fn new(data: &[u8]) -> Self {
+        let window = glutin::WindowBuilder::new()
+            .with_dimensions(WIDTH, HEIGHT)
+            .with_title("Space Invaders".to_string())
+            .build_glium()
+            .expect("Could not create glutin window.");
+        let program = program!(&window,
+            140 => {
+                vertex: "
+                    #version 140
+                    uniform mat4 matrix;
+                    in vec2 position;
+                    in vec2 tex_coords;
+                    out vec2 v_tex_coords;
+                    void main() {
+                        gl_Position = matrix * vec4(position, 0.0, 1.0);
+                        v_tex_coords = tex_coords;
+                    }
+                ",
+
+                fragment: "
+                    #version 140
+                    uniform sampler2D tex;
+                    in vec2 v_tex_coords;
+                    out vec4 f_color;
+                    void main() {
+                        f_color = texture(tex, v_tex_coords);
+                    }
+                "
+            },
+
+            110 => {  
+                vertex: "
+                    #version 110
+                    uniform mat4 matrix;
+                    attribute vec2 position;
+                    attribute vec2 tex_coords;
+                    varying vec2 v_tex_coords;
+                    void main() {
+                        gl_Position = matrix * vec4(position, 0.0, 1.0);
+                        v_tex_coords = tex_coords;
+                    }
+                ",
+
+                fragment: "
+                    #version 110
+                    uniform sampler2D tex;
+                    varying vec2 v_tex_coords;
+                    void main() {
+                        gl_FragColor = texture2D(tex, v_tex_coords);
+                    }
+                ",
+            },
+
+            100 => {  
+                vertex: "
+                    #version 100
+                    uniform lowp mat4 matrix;
+                    attribute lowp vec2 position;
+                    attribute lowp vec2 tex_coords;
+                    varying lowp vec2 v_tex_coords;
+                    void main() {
+                        gl_Position = matrix * vec4(position, 0.0, 1.0);
+                        v_tex_coords = tex_coords;
+                    }
+                ",
+
+                fragment: "
+                    #version 100
+                    uniform lowp sampler2D tex;
+                    varying lowp vec2 v_tex_coords;
+                    void main() {
+                        gl_FragColor = texture2D(tex, v_tex_coords);
+                    }
+                ",
+            },
+        ).expect("Could not create shader program.");
+        let texture = glium::texture::Texture2d::empty_with_format(&window,
+            UncompressedFloatFormat::U8,
+            MipmapsOption::NoMipmap,
+            WIDTH, HEIGHT)
+            .ok().expect("Could not create Texture2d.");
+        let vertex_buffer = {
+            // Full screen quad
+            glium::VertexBuffer::new(&window, 
+                &[
+                    Vertex { position: [-1.0, -1.0], tex_coords: [0.0, 0.0] },
+                    Vertex { position: [-1.0,  1.0], tex_coords: [0.0, 1.0] },
+                    Vertex { position: [ 1.0,  1.0], tex_coords: [1.0, 1.0] },
+                    Vertex { position: [ 1.0, -1.0], tex_coords: [1.0, 0.0] }
+                ]
+            ).expect("Could not create VertexBuffer.")
+        };
+        let index_buffer = glium::IndexBuffer::new(
+            &window, PrimitiveType::TriangleStrip,
+            &[1 as u16, 2, 0, 3]).expect("Could not create IndexBuffer.");
         let mut machine = SpaceInvadersMachine {
             cpu: Cpu::with_size(65536),
             shiftx: 0,
             shifty: 0,
             shift_offset: 0,
+            window: window,
+            program: program,
+            texture: texture,
+            vertex_buffer: vertex_buffer,
+            index_buffer: index_buffer,
         };
+        // Load ROM into memory
         for (i, byte) in data.iter().enumerate() {
             machine.cpu.mem.write(i as u16, byte.clone());
         }
@@ -1736,15 +1928,80 @@ impl SpaceInvadersMachine {
             },
             0xdb => { // IN D8
                 let port = self.cpu.mem.read(self.cpu.pc + 1);
-                if port == 3 {
-                    let value = (self.shifty as u16) << 8 | self.shiftx as u16;
-                    self.cpu.a = ((value >> (8 - self.shift_offset)) & 0xff) as u8;
-                }
+                self.cpu.a = match port {
+                    0 => 1,
+                    1 => 0,
+                    3 => {
+                        let value = (self.shifty as u16) << 8 | self.shiftx as u16;
+                        ((value >> (8 - self.shift_offset)) & 0xff) as u8
+                    },
+                    _ => self.cpu.a,
+                };
                 self.cpu.pc += 2;
                 10
             },
             _ => self.cpu.step()
         }
+    }
+
+    /// Take the framebuffer from the emulated CPU and
+    /// upload the data to a texture on the GPU.
+    #[inline(always)]
+    pub fn draw(&mut self) {
+        // Framebuffer lives between 0x2400 and 0x3fff.
+        // Screen is 256x224 pixels but the screen is rotated
+        // 90 degrees counter-clockwise in the machine
+        // so the visible screen is actually 224x256 pixels.
+
+        // Game's framebuffer is loaded into an OpenGL
+        // texture that is uploaded to the GPU.
+        // Remap 1bpp in video memory into an 8bpp
+        // Vector that will be uploaded to the GPU.
+        let mut pixels = Vec::with_capacity(256);
+        for y in 0..256 {
+            let mut row: Vec<u8> = Vec::with_capacity(224);
+            for x in 0..224 {
+                let offset = (x * (256 / 8)) + y / 8;
+                let byte = self.cpu.mem.read(0x2400 + (offset as u16));
+                let p = y % 8;
+                if byte & (1 << p) != 0 {
+                    row.push(0xff);
+                } else {
+                    row.push(0x00);
+                }
+            }
+            pixels.push(row);
+        }
+        // pixels.reverse();
+        // for y in 0..256 {
+        //     for x in 0..224 {
+        //         let pixel = pixels[y as usize][x as usize];
+        //         if pixel == 0xff { print!("1"); } else { print!("0"); }
+        //     }
+        //     print!("\n");
+        // }
+        self.texture.write(Rect { left: 0, bottom: 0, width: WIDTH, height: HEIGHT }, pixels);
+        // let texture = glium::texture::Texture2d::new(&self.window, pixels).unwrap();
+        let uniforms = uniform! {
+            matrix: [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0f32]
+            ],
+            tex: &self.texture
+        };
+
+        // Do the actual drawing
+        let mut frame = self.window.draw();
+        frame.clear_color(1.0, 1.0, 1.0, 0.0);
+        frame.draw(
+            &self.vertex_buffer,
+            &self.index_buffer,
+            &self.program,
+            &uniforms,
+            &Default::default()).unwrap();
+        frame.finish().unwrap();
     }
 
     #[inline(always)]
@@ -1757,6 +2014,7 @@ impl SpaceInvadersMachine {
         // Set PC to low memory vector
         // This is identical to a an `RST int` instruction
         self.cpu.pc = (8 * int) as u16;
+        self.cpu.interrupt_enabled = false;
     }
 
     pub fn run(&mut self) {
@@ -1771,8 +2029,8 @@ impl SpaceInvadersMachine {
         // Nanoseconds per cycle
         let ns_per_cycle = ((1.0 / (self.cpu.speed as f64)) * 1_000_000_000.0) as u32;
 
-        loop {
-            print!("{}: ", i);
+        'main: loop {
+            // print!("{}: ", i);
             let cycles = self.step();
 
             i += 1;
@@ -1784,6 +2042,43 @@ impl SpaceInvadersMachine {
                 // VBlank interrupt
                 self.interrupt(2);
                 last_interrupt = current;
+
+                // TODO: move drawing somewhere else?
+                self.draw();
+                // break 'main;
+            }
+
+            for event in self.window.poll_events() {
+                match event {
+                    Event::Closed => break 'main,
+                    Event::KeyboardInput(state, _, Some(VirtualKeyCode::Escape)) => if state == Pressed {
+                        break 'main;
+                    },
+                    Event::KeyboardInput(state, _, Some(VirtualKeyCode::Right)) => {
+                        if state == Pressed {
+                            self.cpu.ports[1] |= 0x20;
+                        } else {
+                            self.cpu.ports[1] &= !0x20;
+                        }
+                    },
+                    Event::KeyboardInput(state, _, Some(VirtualKeyCode::Left)) => {
+                        if state == Pressed {
+                            self.cpu.ports[1] |= 0x40;
+                        } else {
+                            self.cpu.ports[1] &= !0x40;
+                        }
+                    },
+                    Event::KeyboardInput(state, _, Some(VirtualKeyCode::C)) => {
+                        if state == Pressed {
+                            self.cpu.ports[1] |= 0x01;
+                        } else {
+                            self.cpu.ports[1] &= !0x01;
+                        }
+                    }
+                    // Event::KeyboardInput(state, _, Some(VirtualKeyCode::Up)) => input.up = state == Pressed,
+                    // Event::KeyboardInput(state, _, Some(VirtualKeyCode::Down)) => input.down = state == Pressed,
+                    _ => {}
+                }
             }
 
             // Actual time taken to run operation.
@@ -1817,7 +2112,7 @@ fn main() {
     // dis(&buf);
 
     // let program = match disassemble(&buf) {
-    //     nom::IResult::Done(input, output) => Program(output),
+    //     nom::IResult::Done(input, output) => Binary(output),
     //     _ => panic!("Failed to parse input.")
     // };
     // io::stdout().write(&format!("{}", program).into_bytes()).unwrap();
