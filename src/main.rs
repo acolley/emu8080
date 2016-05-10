@@ -1,5 +1,4 @@
 #![feature(slice_patterns)]
-#![feature(step_by)]
 
 extern crate clap;
 #[macro_use]
@@ -23,6 +22,7 @@ use glium::glutin::Event;
 use glium::glutin::VirtualKeyCode;
 use glium::index::PrimitiveType;
 use glium::texture::{MipmapsOption, Texture2dDataSource, UncompressedFloatFormat};
+use glium::uniforms::{MagnifySamplerFilter, MinifySamplerFilter};
 
 #[derive(Debug)]
 struct Addr(u8, u8);
@@ -1868,9 +1868,9 @@ impl SpaceInvadersMachine {
             },
         ).expect("Could not create shader program.");
         let texture = glium::texture::Texture2d::empty_with_format(&window,
-            UncompressedFloatFormat::U8,
+            UncompressedFloatFormat::U8U8U8U8,
             MipmapsOption::NoMipmap,
-            WIDTH, HEIGHT)
+            WIDTH * 2, HEIGHT * 2) // why does it have to be double the size?
             .ok().expect("Could not create Texture2d.");
         let vertex_buffer = {
             // Full screen quad
@@ -1957,31 +1957,25 @@ impl SpaceInvadersMachine {
         // texture that is uploaded to the GPU.
         // Remap 1bpp in video memory into an 8bpp
         // Vector that will be uploaded to the GPU.
-        let mut pixels = Vec::with_capacity(256);
-        for y in 0..256 {
-            let mut row: Vec<u8> = Vec::with_capacity(224);
-            for x in 0..224 {
-                let offset = (x * (256 / 8)) + y / 8;
+        let mut pixels = Vec::with_capacity(HEIGHT as usize);
+        for y in 0..HEIGHT {
+            let mut row: Vec<(u8, u8, u8, u8)> = Vec::with_capacity(WIDTH as usize);
+            for x in 0..WIDTH {
+                let offset = (x * (HEIGHT / 8)) + y / 8;
                 let byte = self.cpu.mem.read(0x2400 + (offset as u16));
                 let p = y % 8;
-                if byte & (1 << p) != 0 {
-                    row.push(0x0f);
+                if (byte & (1 << p)) != 0 {
+                    row.push((0xff, 0xff, 0xff, 0xff));
                 } else {
-                    row.push(0xf0);
+                    row.push((0x00, 0x00, 0x00, 0xff));
                 }
             }
             pixels.push(row);
         }
-        // pixels.reverse();
-        // for y in 0..256 {
-        //     for x in 0..224 {
-        //         let pixel = pixels[y as usize][x as usize];
-        //         if pixel == 0xff { print!("1"); } else { print!("0"); }
-        //     }
-        //     print!("\n");
-        // }
         self.texture.write(Rect { left: 0, bottom: 0, width: WIDTH, height: HEIGHT }, pixels);
-        // let texture = glium::texture::Texture2d::new(&self.window, pixels).unwrap();
+        let sampled = self.texture.sampled()
+            .minify_filter(MinifySamplerFilter::Nearest)
+            .magnify_filter(MagnifySamplerFilter::Nearest);
         let uniforms = uniform! {
             matrix: [
                 [1.0, 0.0, 0.0, 0.0],
@@ -1989,12 +1983,12 @@ impl SpaceInvadersMachine {
                 [0.0, 0.0, 1.0, 0.0],
                 [0.0, 0.0, 0.0, 1.0f32]
             ],
-            tex: &self.texture
+            tex: sampled
         };
 
         // Do the actual drawing
         let mut frame = self.window.draw();
-        frame.clear_color(1.0, 1.0, 1.0, 0.0);
+        frame.clear_color(0.2, 0.5, 1.0, 0.0);
         frame.draw(
             &self.vertex_buffer,
             &self.index_buffer,
@@ -2045,7 +2039,6 @@ impl SpaceInvadersMachine {
 
                 // TODO: move drawing somewhere else?
                 self.draw();
-                // break 'main;
             }
 
             for event in self.window.poll_events() {
