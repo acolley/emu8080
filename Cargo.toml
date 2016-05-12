@@ -8,3 +8,6 @@ clap = "2.3.0"
 glium = "0.14.0"
 nom = "1.2.2"
 time = "0.1.35"
+
+[profile.dev]
+debug = true

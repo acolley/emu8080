@@ -1446,6 +1446,15 @@ impl Cpu {
                 self.b = self.e;
                 5
             },
+            0x4d => { // MOV C,L
+                self.c = self.l;
+                5
+            },
+            0x4e => { // MOV C,M
+                let addr = (self.h as u16) << 8 | (self.l as u16);
+                self.c = self.mem.read(addr);
+                7
+            },
             0x56 => { // MOV D,M
                 let addr = (self.h as u16) << 8 | (self.l as u16);
                 self.d = self.mem.read(addr);
@@ -1636,6 +1645,16 @@ impl Cpu {
                 self.sp += 2;
                 10
             },
+            0xd2 => { // JNC addr
+                if self.cc.cy == 0 {
+                    let lo = self.mem.read(self.pc + 1);
+                    let hi = self.mem.read(self.pc + 2);
+                    self.pc = (hi as u16) << 8 | (lo as u16);
+                } else {
+                    self.pc += 2;
+                }
+                10
+            },
             0xd3 => { // OUT D8
                 let port = self.mem.read(self.pc + 1);
                 self.ports[port as usize] = self.a;
@@ -1779,6 +1798,7 @@ const HEIGHT: u32 = 256;
 /// $4000-:     RAM mirror
 struct SpaceInvadersMachine {
     cpu: Cpu,
+    time: u64, // time since machine start in nanoseconds
     shiftx: u8,
     shifty: u8,
     shift_offset: u8,
@@ -1888,6 +1908,7 @@ impl SpaceInvadersMachine {
             &[1 as u16, 2, 0, 3]).expect("Could not create IndexBuffer.");
         let mut machine = SpaceInvadersMachine {
             cpu: Cpu::with_size(65536),
+            time: 0,
             shiftx: 0,
             shifty: 0,
             shift_offset: 0,
@@ -1910,6 +1931,7 @@ impl SpaceInvadersMachine {
     #[inline(always)]
     pub fn step(&mut self) -> u32 {
         let op = self.cpu.mem.read(self.cpu.pc);
+        // println!("pc: {:>0padpc$x}, op: {:>0padop$x}", self.cpu.pc, op, padpc=4, padop=2);
         match op {
             0xd3 => { // OUT D8
                 let port = self.cpu.mem.read(self.cpu.pc + 1);
@@ -1952,6 +1974,7 @@ impl SpaceInvadersMachine {
         // Screen is 256x224 pixels but the screen is rotated
         // 90 degrees counter-clockwise in the machine
         // so the visible screen is actually 224x256 pixels.
+        // http://computerarcheology.com/Arcade/SpaceInvaders/Hardware.html
 
         // Game's framebuffer is loaded into an OpenGL
         // texture that is uploaded to the GPU.
@@ -1988,7 +2011,7 @@ impl SpaceInvadersMachine {
 
         // Do the actual drawing
         let mut frame = self.window.draw();
-        frame.clear_color(0.2, 0.5, 1.0, 0.0);
+        frame.clear_color(0.0, 0.0, 0.0, 0.0);
         frame.draw(
             &self.vertex_buffer,
             &self.index_buffer,
@@ -2012,75 +2035,86 @@ impl SpaceInvadersMachine {
     }
 
     pub fn run(&mut self) {
-        let mut current = time::precise_time_ns();
-        let mut old = current;
         let mut i = 0usize;
 
-        let mut last_interrupt = current;
-
-        let sixtieth_of_second = ((1.0f64 / 60.0f64) * 1_000_000_000.0) as u64;
+        let sixtieth_of_second_ns = ((1.0f64 / 60.0f64) * 1_000_000_000.0) as u64;
 
         // Nanoseconds per cycle
         let ns_per_cycle = ((1.0 / (self.cpu.speed as f64)) * 1_000_000_000.0) as u32;
 
+        let mut current_real_time = time::precise_time_ns();
+        let mut last_real_time = current_real_time;
+
+        let mut last_interrupt_time_ns = self.time;
+
+        // The next interrupt code to be used
+        let mut next_int = 2;
+
         'main: loop {
+            current_real_time = time::precise_time_ns();
             // print!("{}: ", i);
             let cycles = self.step();
 
+            self.time += (cycles * ns_per_cycle) as u64;
+
             i += 1;
 
-            old = current;
-            current = time::precise_time_ns();
-
-            if self.cpu.interrupt_enabled && current - last_interrupt >= sixtieth_of_second {
+            // Interrupt after a sixtieth of a second of simulated time
+            if self.cpu.interrupt_enabled && self.time - last_interrupt_time_ns >= sixtieth_of_second_ns {
                 // VBlank interrupt
-                self.interrupt(2);
-                last_interrupt = current;
+                self.interrupt(next_int);
+                // next_int = if next_int == 2 { 1 } else { 2 };
+                last_interrupt_time_ns = self.time;
 
                 // TODO: move drawing somewhere else?
                 self.draw();
             }
 
-            for event in self.window.poll_events() {
-                match event {
-                    Event::Closed => break 'main,
-                    Event::KeyboardInput(state, _, Some(VirtualKeyCode::Escape)) => if state == Pressed {
-                        break 'main;
-                    },
-                    Event::KeyboardInput(state, _, Some(VirtualKeyCode::Right)) => {
-                        if state == Pressed {
-                            self.cpu.ports[1] |= 0x20;
-                        } else {
-                            self.cpu.ports[1] &= !0x20;
+            // Only poll events every sixtieth of a second in real time
+            // to reduce processing time of polling for events.
+            if current_real_time - last_real_time >= sixtieth_of_second_ns {
+                last_real_time = current_real_time;
+                for event in self.window.poll_events() {
+                    match event {
+                        Event::Closed => break 'main,
+                        Event::KeyboardInput(state, _, Some(VirtualKeyCode::Escape)) => if state == Pressed {
+                            break 'main;
+                        },
+                        Event::KeyboardInput(state, _, Some(VirtualKeyCode::Right)) => {
+                            if state == Pressed {
+                                self.cpu.ports[1] |= 0x20;
+                            } else {
+                                self.cpu.ports[1] &= !0x20;
+                            }
+                        },
+                        Event::KeyboardInput(state, _, Some(VirtualKeyCode::Left)) => {
+                            if state == Pressed {
+                                self.cpu.ports[1] |= 0x40;
+                            } else {
+                                self.cpu.ports[1] &= !0x40;
+                            }
+                        },
+                        Event::KeyboardInput(state, _, Some(VirtualKeyCode::C)) => {
+                            if state == Pressed {
+                                self.cpu.ports[1] |= 0x01;
+                            } else {
+                                self.cpu.ports[1] &= !0x01;
+                            }
                         }
-                    },
-                    Event::KeyboardInput(state, _, Some(VirtualKeyCode::Left)) => {
-                        if state == Pressed {
-                            self.cpu.ports[1] |= 0x40;
-                        } else {
-                            self.cpu.ports[1] &= !0x40;
-                        }
-                    },
-                    Event::KeyboardInput(state, _, Some(VirtualKeyCode::C)) => {
-                        if state == Pressed {
-                            self.cpu.ports[1] |= 0x01;
-                        } else {
-                            self.cpu.ports[1] &= !0x01;
-                        }
+                        // Event::KeyboardInput(state, _, Some(VirtualKeyCode::Up)) => input.up = state == Pressed,
+                        // Event::KeyboardInput(state, _, Some(VirtualKeyCode::Down)) => input.down = state == Pressed,
+                        _ => {}
                     }
-                    // Event::KeyboardInput(state, _, Some(VirtualKeyCode::Up)) => input.up = state == Pressed,
-                    // Event::KeyboardInput(state, _, Some(VirtualKeyCode::Down)) => input.down = state == Pressed,
-                    _ => {}
                 }
             }
 
-            // Actual time taken to run operation.
-            let diff = (current - old) as i32;
-            // Emulated time to wait given the CPU runs at a particular clock rate.
-            let wait = ((ns_per_cycle * cycles) as i32) - diff;
-            if wait > 0 {
-                ::std::thread::sleep(::std::time::Duration::new(0, ns_per_cycle * cycles));
-            }
+            // // Actual time taken to run operation.
+            // let diff = (current - old) as i32;
+            // // Emulated time to wait given the CPU runs at a particular clock rate.
+            // let wait = ((ns_per_cycle * cycles) as i32) - diff;
+            // if wait > 0 {
+            //     ::std::thread::sleep(::std::time::Duration::new(0, ns_per_cycle * cycles));
+            // }
         }
     }
 }
