@@ -1887,10 +1887,11 @@ impl SpaceInvadersMachine {
                 ",
             },
         ).expect("Could not create shader program.");
+        let hidpi_factor = window.get_window().unwrap().hidpi_factor() as u32;
         let texture = glium::texture::Texture2d::empty_with_format(&window,
             UncompressedFloatFormat::U8U8U8U8,
             MipmapsOption::NoMipmap,
-            WIDTH * 2, HEIGHT * 2) // why does it have to be double the size?
+            WIDTH * hidpi_factor, HEIGHT * hidpi_factor)
             .ok().expect("Could not create Texture2d.");
         let vertex_buffer = {
             // Full screen quad
