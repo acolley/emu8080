@@ -1807,6 +1807,7 @@ struct SpaceInvadersMachine {
     texture: glium::texture::Texture2d,
     vertex_buffer: glium::VertexBuffer<Vertex>,
     index_buffer: glium::IndexBuffer<u16>,
+    vbuffer: Vec<Vec<(u8, u8, u8)>>,
 }
 
 impl SpaceInvadersMachine {
@@ -1889,7 +1890,7 @@ impl SpaceInvadersMachine {
         ).expect("Could not create shader program.");
         let hidpi_factor = window.get_window().unwrap().hidpi_factor() as u32;
         let texture = glium::texture::Texture2d::empty_with_format(&window,
-            UncompressedFloatFormat::U8U8U8U8,
+            UncompressedFloatFormat::U8U8U8,
             MipmapsOption::NoMipmap,
             WIDTH * hidpi_factor, HEIGHT * hidpi_factor)
             .ok().expect("Could not create Texture2d.");
@@ -1907,6 +1908,12 @@ impl SpaceInvadersMachine {
         let index_buffer = glium::IndexBuffer::new(
             &window, PrimitiveType::TriangleStrip,
             &[1 as u16, 2, 0, 3]).expect("Could not create IndexBuffer.");
+        let mut vbuffer = Vec::with_capacity(HEIGHT as usize);
+        for _ in 0..HEIGHT {
+            let mut row = Vec::with_capacity(WIDTH as usize);
+            row.resize(WIDTH as usize, (0x00, 0x00, 0x00));
+            vbuffer.push(row);
+        }
         let mut machine = SpaceInvadersMachine {
             cpu: Cpu::with_size(65536),
             time: 0,
@@ -1918,6 +1925,7 @@ impl SpaceInvadersMachine {
             texture: texture,
             vertex_buffer: vertex_buffer,
             index_buffer: index_buffer,
+            vbuffer: vbuffer,
         };
         // Load ROM into memory
         for (i, byte) in data.iter().enumerate() {
@@ -1981,22 +1989,63 @@ impl SpaceInvadersMachine {
         // texture that is uploaded to the GPU.
         // Remap 1bpp in video memory into an 8bpp
         // Vector that will be uploaded to the GPU.
-        let mut pixels = Vec::with_capacity(HEIGHT as usize);
+
+        // Calculate what part of the video buffer has
+        // changed since the last frame. This means we
+        // only have to upload the diff instead of the
+        // entire buffer every frame.
+        let (mut xmin, mut xmax) = (::std::u32::MAX, 0);
+        let (mut ymin, mut ymax) = (::std::u32::MAX, 0);
         for y in 0..HEIGHT {
-            let mut row: Vec<(u8, u8, u8, u8)> = Vec::with_capacity(WIDTH as usize);
             for x in 0..WIDTH {
                 let offset = (x * (HEIGHT / 8)) + y / 8;
                 let byte = self.cpu.mem.read(0x2400 + (offset as u16));
                 let p = y % 8;
-                if (byte & (1 << p)) != 0 {
-                    row.push((0xff, 0xff, 0xff, 0xff));
+                let value = if (byte & (1 << p)) != 0 {
+                    (0xff, 0xff, 0xff)
                 } else {
-                    row.push((0x00, 0x00, 0x00, 0xff));
+                    (0x00, 0x00, 0x00)
+                };
+                if self.vbuffer[y as usize][x as usize] != value {
+                    self.vbuffer[y as usize][x as usize] = value;
+                    if x < xmin {
+                        xmin = x;
+                    }
+                    if x > xmax {
+                        xmax = x;
+                    }
+                    if y < ymin {
+                        ymin = y;
+                    }
+                    if y > ymax {
+                        ymax = y;
+                    }
                 }
             }
-            pixels.push(row);
         }
-        self.texture.write(Rect { left: 0, bottom: 0, width: WIDTH, height: HEIGHT }, pixels);
+
+        if xmin < ::std::u32::MAX && ymin < ::std::u32::MAX {
+            let width = xmax - xmin + 1;
+            let height = ymax - ymin + 1;
+            let mut pixels = Vec::with_capacity(height as usize);
+            for y in ymin..ymax+1 {
+                let mut row: Vec<(u8, u8, u8)> = Vec::with_capacity(width as usize);
+                for x in xmin..xmax+1 {
+                    let offset = (x * (HEIGHT / 8)) + y / 8;
+                    let byte = self.cpu.mem.read(0x2400 + (offset as u16));
+                    let p = y % 8;
+                    let value = if (byte & (1 << p)) != 0 {
+                        (0xff, 0xff, 0xff)
+                    } else {
+                        (0x00, 0x00, 0x00)
+                    };
+                    row.push(value);
+                }
+                pixels.push(row);
+            }
+            self.texture.write(Rect { left: xmin, bottom: ymin, width: width, height: height }, pixels);
+        }
+
         let sampled = self.texture.sampled()
             .minify_filter(MinifySamplerFilter::Nearest)
             .magnify_filter(MagnifySamplerFilter::Nearest);
