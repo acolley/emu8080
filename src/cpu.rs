@@ -26,26 +26,28 @@ impl ConditionCodes {
 pub struct Memory(Vec<u8>);
 
 impl Memory {
-    pub fn new() -> Self {
-        Self::with_size(65536) // 16 kB of Memory
-    }
-
-    pub fn with_size(size: usize) -> Self {
-        let mut mem = Vec::with_capacity(size);
-        mem.resize(size, 0); // zero the memory
+    pub fn with_data(data: &[u8]) -> Self {
+        let mut mem = Vec::with_capacity(65536);
+        mem.resize(65536, 0);
+        for (i, x) in data.iter().enumerate() {
+            mem[i] = x.clone();
+        }
         Memory(mem)
     }
 
     #[inline(always)]
-    pub fn read(&self, i: u16) -> u8 {
+    pub fn read(&self, addr: u16) -> u8 {
         let Memory(ref mem) = *self;
-        mem[i as usize]
+        mem[addr as usize]
     }
 
     #[inline(always)]
-    pub fn write(&mut self, i: u16, d: u8) {
+    pub fn write(&mut self, addr: u16, d: u8) {
+        if addr < 0x2000 {
+            panic!("Trying to write to ROM at: {:>0pad$x}", addr, pad=4)
+        }
         let Memory(ref mut mem) = *self;
-        mem[i as usize] = d;
+        mem[addr as usize] = d;
     }
 }
 
@@ -86,11 +88,7 @@ pub struct Cpu {
 }
 
 impl Cpu {
-    pub fn new() -> Self {
-        Self::with_size(65536)
-    }
-
-    pub fn with_size(size: usize) -> Self {
+    pub fn with_data(data: &[u8]) -> Self {
         Cpu {
             a: 0x00,
             b: 0x00,
@@ -101,7 +99,7 @@ impl Cpu {
             l: 0x00,
             sp: 0x0000,
             pc: 0x0000,
-            mem: Memory::with_size(size),
+            mem: Memory::with_data(data),
             cc: ConditionCodes::new(),
             interrupt_enabled: false,
             ports: [0; 8],
@@ -130,6 +128,7 @@ impl Cpu {
     pub fn step(&mut self) -> u32 {
         let op = self.mem.read(self.pc);
         // println!("pc: {:>0padpc$x}, op: {:>0padop$x}", self.pc, op, padpc=4, padop=2);
+        println!("pc: {:>0pad$x} a: {:>0pad$x} b: {:>0pad$x} c: {:>0pad$x} d: {:>0pad$x} e: {:>0pad$x} h: {:>0pad$x} l: {:>0pad$x}", self.pc, self.a, self.b, self.c, self.d, self.e, self.h, self.l, pad=2);
         let cycles = match op {
             0x00 => { 4 }, // NOP
             0x01 => { // LXI B,word
