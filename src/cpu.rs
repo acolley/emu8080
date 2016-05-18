@@ -48,7 +48,7 @@ impl Memory {
     #[inline(always)]
     pub fn write(&mut self, addr: u16, d: u8) {
         if addr < 0x2000 {
-            panic!("Trying to write to ROM at: {:>0pad$x}", addr, pad=4)
+            panic!("Trying to write {:>0padd$x} to ROM at: {:>0pada$x}", d, addr, padd=2, pada=4);
         }
         let Memory(ref mut mem) = *self;
         mem[addr as usize] = d;
@@ -66,11 +66,7 @@ fn parity(x: u8, size: u8) -> u8 {
         x = x.wrapping_shr(1);
     }
 
-    if (p & 0x1) == 0 {
-        1
-    } else {
-        0
-    }
+    if (p & 0x1) == 0 { 1 } else { 0 }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
