@@ -1,8 +1,12 @@
-pub fn disassemble(bytes: &[u8]) {
+/// Disassemble the given compiled 8080 binary
+/// code in `bytes`.
+/// `offset` is where the the first instruction
+/// starts in memory.
+pub fn disassemble(bytes: &[u8], offset: usize) {
     let mut pc = 0;
     let mut iter = bytes.iter();
     while let Some(op) = iter.next() {
-        print!("{:>0pad$x} ", pc, pad=4);
+        print!("{:>0pad$x} ", pc + offset, pad=4);
         match *op {
             0x00 => println!("NOP"),
             0x01 => {

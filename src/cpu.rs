@@ -27,10 +27,14 @@ pub struct Memory(Vec<u8>);
 
 impl Memory {
     pub fn with_data(data: &[u8]) -> Self {
+        Self::with_data_and_offset(data, 0)
+    }
+
+    pub fn with_data_and_offset(data: &[u8], offset: usize) -> Self {
         let mut mem = Vec::with_capacity(65536);
         mem.resize(65536, 0);
         for (i, x) in data.iter().enumerate() {
-            mem[i] = x.clone();
+            mem[i + offset] = x.clone();
         }
         Memory(mem)
     }
@@ -89,6 +93,10 @@ pub struct Cpu {
 
 impl Cpu {
     pub fn with_data(data: &[u8]) -> Self {
+        Self::with_data_and_offset(data, 0)
+    }
+
+    pub fn with_data_and_offset(data: &[u8], offset: usize) -> Self {
         Cpu {
             a: 0x00,
             b: 0x00,
@@ -99,7 +107,7 @@ impl Cpu {
             l: 0x00,
             sp: 0x0000,
             pc: 0x0000,
-            mem: Memory::with_data(data),
+            mem: Memory::with_data_and_offset(data, offset),
             cc: ConditionCodes::new(),
             interrupt_enabled: false,
             ports: [0; 8],
@@ -127,8 +135,6 @@ impl Cpu {
     #[inline(always)]
     pub fn step(&mut self) -> u32 {
         let op = self.mem.read(self.pc);
-        // println!("pc: {:>0padpc$x}, op: {:>0padop$x}", self.pc, op, padpc=4, padop=2);
-        println!("pc: {:>0pad$x} a: {:>0pad$x} b: {:>0pad$x} c: {:>0pad$x} d: {:>0pad$x} e: {:>0pad$x} h: {:>0pad$x} l: {:>0pad$x}", self.pc, self.a, self.b, self.c, self.d, self.e, self.h, self.l, pad=2);
         let cycles = match op {
             0x00 => { 4 }, // NOP
             0x01 => { // LXI B,word
@@ -547,6 +553,15 @@ impl Cpu {
                 self.cc.p = parity(self.a, 8);
                 4
             },
+            0xb3 => { // ORA E
+                self.a = self.a | self.e;
+                self.cc.cy = 0;
+                self.cc.ac = 0;
+                self.cc.z = if self.a == 0 { 1 } else { 0 };
+                self.cc.s = if (self.a & 0x80) == 0x80 { 1 } else { 0 };
+                self.cc.p = parity(self.a, 8);
+                4
+            },
             0xbe => { // CMP M
                 let addr = (self.h as u16) << 8 | (self.l as u16);
                 let x = self.mem.read(addr);
@@ -776,4 +791,130 @@ impl Cpu {
 
     // TODO: safe interface for reading/writing from/to memory.
     // This will allow the enforcement of a maximum memory size.
+}
+
+#[test]
+fn test_nop() {
+    let mut cpu = Cpu::with_data(&[0x00]);
+    cpu.step();
+    let mut expected = Cpu::new();
+    expected.pc += 1;
+    assert_eq!(cpu, expected);
+}
+
+#[test]
+fn test_lxi_b() {
+    let mut cpu = Cpu::with_data(&[0x01, 0xfe, 0xff]);
+    let mut expected = cpu.clone();
+    expected.pc = 3;
+    expected.b = 0xff;
+    expected.c = 0xfe;
+
+    cpu.step();
+    assert_eq!(cpu, expected);
+}
+
+#[test]
+fn test_stax_b() {
+    let mut cpu = Cpu::new();
+    cpu.mem.write(0, 0x02);
+    cpu.mem.write(0xfffe, 0xaa);
+    cpu.b = 0xfe;
+    cpu.c = 0xff;
+    let mut expected = cpu.clone();
+    expected.pc = 1;
+    expected.b = 0xfe;
+    expected.c = 0xff;
+    expected.a = 0xaa;
+
+    cpu.step();
+    assert_eq!(cpu, expected);
+}
+
+#[test]
+fn test_inx_b() {
+    let mut cpu = Cpu::new();
+    cpu.mem.write(0, 0x03);
+    cpu.b = 0xfe;
+    cpu.c = 0xff;
+    let mut expected = cpu.clone();
+    expected.pc = 1;
+    expected.b = 0xff;
+    expected.c = 0xff;
+
+    cpu.step();
+    assert_eq!(cpu, expected);
+}
+
+#[test]
+fn test_inr_b() {
+    //! Test increment register B
+    let mut cpu = Cpu::new();
+    cpu.mem.write(0, 0x04);
+    cpu.b = 0x01;
+    let mut expected = cpu.clone();
+    expected.pc = 1;
+    expected.b = 0x02;
+
+    cpu.step();
+    assert_eq!(cpu, expected);
+}
+
+#[test]
+fn test_inr_b_carry_zero() {
+    //! Test increment register B with Carry and Zero flag
+    let mut cpu = Cpu::new();
+    cpu.mem.write(0, 0x04);
+    cpu.b = 0xff;
+    let mut expected = cpu.clone();
+    expected.pc = 1;
+    expected.b = 0x00;
+    expected.cc.z = 1;
+    expected.cc.cy = 1;
+
+    cpu.step();
+    assert_eq!(cpu, expected);
+}
+
+#[test]
+fn test_dcr_b() {
+    //! Test decrement register B
+    let mut cpu = Cpu::new();
+    cpu.mem.write(0, 0x05);
+    cpu.b = 0x02;
+    let mut expected = cpu.clone();
+    expected.pc = 1;
+    expected.b = 0x01;
+
+    cpu.step();
+    assert_eq!(cpu, expected);
+}
+
+#[test]
+fn test_dcr_b_zero() {
+    //! Test decrement register B with Zero flag
+    let mut cpu = Cpu::new();
+    cpu.mem.write(0, 0x05);
+    cpu.b = 0x01;
+    let mut expected = cpu.clone();
+    expected.pc = 1;
+    expected.b = 0x00;
+    expected.cc.z = 1;
+
+    cpu.step();
+    assert_eq!(cpu, expected);
+}
+
+#[test]
+fn test_mvi_b() {
+    //! Test move immediate word to register B
+    let mut cpu = Cpu::new();
+    cpu.mem.write(0, 0x06);
+    cpu.mem.write(1, 0xee);
+    let mut expected = cpu.clone();
+    expected.pc = 2;
+    expected.b = 0xee;
+
+    cpu.step();
+    assert_eq!(cpu, expected);
 }
