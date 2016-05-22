@@ -140,11 +140,14 @@ impl SpaceInvadersMachine {
                 ",
             },
         ).expect("Could not create shader program.");
+
         let hidpi_factor = window.get_window().unwrap().hidpi_factor() as u32;
+        // TODO: take into account hidpi factor if we're running an older
+        // version of Mac OSX that has issues with glium.
         let texture = glium::texture::Texture2d::empty_with_format(&window,
             UncompressedFloatFormat::U8U8U8,
             MipmapsOption::NoMipmap,
-            WIDTH * hidpi_factor, HEIGHT * hidpi_factor)
+            WIDTH, HEIGHT)
             .ok().expect("Could not create Texture2d.");
         let vertex_buffer = {
             // Full screen quad
@@ -356,7 +359,7 @@ impl SpaceInvadersMachine {
             last_real_time = current_real_time;
             current_real_time = time::precise_time_ns();
             code_time += current_real_time - last_real_time;
-            print!("{}: ", i);
+            // print!("{}: ", i);
             let cycles = self.step();
 
             self.time += (cycles * ns_per_cycle) as u64;
