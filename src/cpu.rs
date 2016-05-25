@@ -40,6 +40,15 @@ fn parity(x: u8, size: u8) -> u8 {
     if (p & 0x1) == 0 { 1 } else { 0 }
 }
 
+/// Deconstruct a u16 value into its
+/// component (lo, hi) bytes.
+#[inline(always)]
+fn split_u16(x: u16) -> (u8, u8) {
+    let lo = (x & 0x00ff) as u8;
+    let hi = ((x & 0xff00) >> 8) as u8;
+    (lo, hi)
+}
+
 #[inline(always)]
 fn make_u16(lo: u8, hi: u8) -> u16 {
     (hi as u16) << 8 | lo as u16
@@ -90,8 +99,8 @@ impl Cpu {
 
     #[inline(always)]
     pub fn push(&mut self, lo: u8, hi: u8) {
-        self.mem.write(self.sp - 1, hi);
         self.mem.write(self.sp - 2, lo);
+        self.mem.write(self.sp - 1, hi);
         self.sp -= 2;
     }
 
@@ -559,9 +568,9 @@ impl Cpu {
                 }
             },
             0xc1 => { // POP B
-                self.c = self.mem.read(self.sp);
-                self.b = self.mem.read(self.sp + 1);
-                self.sp += 2;
+                let (lo, hi) = self.pop();
+                self.c = lo;
+                self.b = hi;
                 10
             },
             0xc2 => { // JNZ
@@ -580,9 +589,8 @@ impl Cpu {
                 return 10;
             },
             0xc5 => { // PUSH B
-                self.mem.write(self.sp - 1, self.b);
-                self.mem.write(self.sp - 2, self.c);
-                self.sp -= 2;
+                let (lo, hi) = (self.c, self.b);
+                self.push(lo, hi);
                 11
             },
             0xc6 => { // ADI D8
@@ -612,20 +620,17 @@ impl Cpu {
                 }
             },
             0xcd => { // CALL addr
-                // Save return address
+                // Push return address on to stack
                 let ret = self.pc + 3;
-                let lo = (ret & 0x00ff) as u8;
-                let hi = ((ret & 0xff00) >> 8) as u8;
-                self.mem.write(self.sp - 1, hi);
-                self.mem.write(self.sp - 2, lo);
-                self.sp -= 2;
+                let (lo, hi) = split_u16(ret);
+                self.push(lo, hi);
                 self.pc = self.read_u16();
                 return 17;
             },
             0xd1 => { // POP D
-                self.e = self.mem.read(self.sp);
-                self.d = self.mem.read(self.sp + 1);
-                self.sp += 2;
+                let (lo, hi) = self.pop();
+                self.e = lo;
+                self.d = hi;
                 10
             },
             0xd2 => { // JNC addr
@@ -643,9 +648,8 @@ impl Cpu {
                 10
             },
             0xd5 => { // PUSH D
-                self.mem.write(self.sp - 1, self.d);
-                self.mem.write(self.sp - 2, self.e);
-                self.sp -= 2;
+                let (lo, hi) = (self.e, self.d);
+                self.push(lo, hi);
                 11
             },
             0xda => { // JC addr
@@ -663,15 +667,14 @@ impl Cpu {
                 10
             },
             0xe1 => { // POP H
-                self.l = self.mem.read(self.sp);
-                self.h = self.mem.read(self.sp + 1);
-                self.sp += 2;
+                let (lo, hi) = self.pop();
+                self.l = lo;
+                self.h = hi;
                 10
             },
             0xe5 => { // PUSH H
-                self.mem.write(self.sp - 1, self.h);
-                self.mem.write(self.sp - 2, self.l);
-                self.sp -= 2;
+                let (lo, hi) = (self.l, self.h);
+                self.push(lo, hi);
                 11
             },
             0xe6 => { // ANI D8
