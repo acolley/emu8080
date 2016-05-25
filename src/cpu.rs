@@ -5,12 +5,12 @@ use memory::Memory;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConditionCodes {
-    z: u8, // Zero
-    s: u8, // Sign
-    p: u8, // Parity
-    cy: u8, // Carry
-    ac: u8,
-    pad: u8,
+    pub z: u8, // Zero
+    pub s: u8, // Sign
+    pub p: u8, // Parity
+    pub cy: u8, // Carry
+    pub ac: u8,
+    pub pad: u8,
 }
 
 impl ConditionCodes {
@@ -112,6 +112,16 @@ impl Cpu {
         let hi = self.mem.read(self.sp + 1);
         self.sp += 2;
         (lo, hi)
+    }
+
+    /// CALL instruction
+    #[inline(always)]
+    fn call(&mut self) {
+        // Push return address on to stack
+        let ret = self.pc + 3;
+        let (lo, hi) = split_u16(ret);
+        self.push(lo, hi);
+        self.pc = self.read_u16();
     }
 
     /// RET instruction
@@ -216,6 +226,15 @@ impl Cpu {
                 self.b = self.read_byte();
                 7
             },
+            0x07 => { // RLC
+                self.a = self.a.rotate_left(1);
+                // If register had a bit switched on in the LSB
+                // then rotating left will have caused a carry.
+                if self.a & 1 == 1 {
+                    self.cc.cy = 1;
+                }
+                4
+            },
             0x09 => { // DAD B
                 let bc = (self.b as u32) << 8 | (self.c as u32);
                 let hl = (self.h as u32) << 8 | (self.l as u32);
@@ -237,6 +256,12 @@ impl Cpu {
                 }
                 5
             },
+            0x0c => { // INR C
+                let c = self.c.wrapping_add(1);
+                self.set_flags_zsp(c);
+                self.c = c;
+                5
+            },
             0x0d => { // DCR C
                 let c = self.c.wrapping_sub(1);
                 self.set_flags_zsp(c);
@@ -249,9 +274,9 @@ impl Cpu {
             },
             0x0f => { // RRC
                 self.a = self.a.rotate_right(1);
-                // If register had a bit switched on in the LSB
+                // If register had a bit switched on in the MSB
                 // then rotating right will have caused a carry.
-                if self.a & 0x01 == 1 {
+                if self.a & 0x80 == 0x80 {
                     self.cc.cy = 1;
                 }
                 4
@@ -274,6 +299,16 @@ impl Cpu {
                 self.set_flags_zsp(d);
                 self.d = d;
                 5
+            },
+            0x15 => { // DCR D
+                let d = self.d.wrapping_sub(1);
+                self.set_flags_zsp(d);
+                self.d = d;
+                5
+            },
+            0x16 => { // MVI D,D8
+                self.d = self.read_byte();
+                7
             },
             0x19 => { // DAD D
                 let de = (self.d as u32) << 8 | (self.e as u32);
@@ -343,6 +378,7 @@ impl Cpu {
                 7
             },
             0x27 => { // DAA
+                // This converts base 16 to base 10.
                 // The eight-bit number in the accumulator is adjusted 
                 // to form two four-bit Binary-Coded-Decimal digits 
                 // by the following Process:
@@ -353,7 +389,7 @@ impl Cpu {
                 // accumulator is now greater than 9, or if the CY flag is set, 
                 // 6 is added to the most significant 4 bits of the accumulator.
                 if self.a & 0xf > 9 {
-                    self.a += 9;
+                    self.a += 6;
                 }
                 if self.a & 0xf0 > 0x90 {
                     let res = (self.a as u16) + 0x60;
@@ -363,16 +399,40 @@ impl Cpu {
                 4
             },
             0x29 => { // DAD H
-                let hl = (self.h as u32) << 8 | (self.l as u32);
+                let hl = make_u32(self.l, self.h);
                 let hl = hl.wrapping_add(hl);
                 self.l = (hl & 0xff) as u8;
                 self.h = ((hl & 0xff00) >> 8) as u8;
                 self.cc.cy = if (hl & 0xffff0000) != 0 { 1 } else { 0 };
                 10
             },
+            0x2a => { // LHLD addr
+                let (lo, hi) = self.read_two_bytes();
+                let addr = make_u16(lo, hi);
+                self.l = self.mem.read(addr);
+                self.h = self.mem.read(addr + 1);
+                16
+            },
+            0x2b => { // DCX H
+                self.l = self.l.wrapping_sub(1);
+                if self.l == 0xff {
+                    self.h = self.h.wrapping_sub(1);
+                }
+                5
+            },
+            0x2c => { // INR L
+                let l = self.l.wrapping_add(1);
+                self.set_flags_zsp(l);
+                self.l = l;
+                5
+            },
             0x2e => { // MVI L,D8
                 self.l = self.read_byte();
                 7
+            },
+            0x2f => { // CMA
+                self.a = !self.a;
+                4
             },
             0x31 => { // LXI SP,D16
                 self.sp = self.read_u16();
@@ -382,6 +442,13 @@ impl Cpu {
                 let addr = self.read_u16();
                 self.mem.write(addr, self.a);
                 13
+            },
+            0x34 => { // INR M
+                let addr = make_u16(self.l, self.h);
+                let x = self.mem.read(addr).wrapping_add(1);
+                self.set_flags_zsp(x);
+                self.mem.write(addr, x);
+                10
             },
             0x35 => { // DCR M
                 let hl = (self.h as u16) << 8 | (self.l as u16);
@@ -412,6 +479,12 @@ impl Cpu {
                 self.a = self.mem.read(addr);
                 13
             },
+            0x3c => { // INR A
+                let a = self.a.wrapping_add(1);
+                self.set_flags_zsp(a);
+                self.a = a;
+                5
+            },
             0x3d => { // DCR A
                 let a = self.a.wrapping_sub(1);
                 self.set_flags_zsp(a);
@@ -441,6 +514,10 @@ impl Cpu {
             0x46 => { // MOV B,M
                 self.b = self.read_from_hl();
                 7
+            },
+            0x47 => { // MOV B,A
+                self.b = self.a;
+                5
             },
             0x48 => { // MOV C,B
                 self.c = self.b;
@@ -474,8 +551,7 @@ impl Cpu {
                 5
             },
             0x56 => { // MOV D,M
-                let addr = (self.h as u16) << 8 | (self.l as u16);
-                self.d = self.mem.read(addr);
+                self.d = self.read_from_hl();
                 7
             },
             0x57 => { // MOV D,A
@@ -483,8 +559,7 @@ impl Cpu {
                 5
             },
             0x5e => { // MOV E,M
-                let addr = (self.h as u16) << 8 | (self.l as u16);
-                self.e = self.mem.read(addr);
+                self.e = self.read_from_hl();
                 7
             },
             0x5f => { // MOV E,A
@@ -495,23 +570,52 @@ impl Cpu {
                 self.h = self.b;
                 5
             },
+            0x61 => { // MOV H,C
+                self.h = self.c;
+                5
+            },
+            0x65 => { // MOV H,L
+                self.h = self.l;
+                5
+            },
             0x66 => { // MOV H,M
-                let addr = (self.h as u16) << 8 | (self.l as u16);
-                self.h = self.mem.read(addr);
+                self.h = self.read_from_hl();
                 7
             },
             0x67 => { // MOV H,A
                 self.h = self.a;
                 5
             },
+            0x68 => { // MOV L,B
+                self.l = self.b;
+                5
+            },
+            0x69 => { // MOV L,C
+                self.l = self.c;
+                5
+            },
             0x6f => { // MOV L,A
                 self.l = self.a;
                 5
             },
+            0x70 => { // MOV M,B
+                let addr = make_u16(self.l, self.h);
+                self.mem.write(addr, self.b);
+                7
+            },
+            0x71 => { // MOV M,C
+                let addr = make_u16(self.l, self.h);
+                self.mem.write(addr, self.c);
+                7
+            },
             0x77 => { // MOV M,A
-                let addr = (self.h as u16) << 8 | (self.l as u16);
+                let addr = make_u16(self.l, self.h);
                 self.mem.write(addr, self.a);
                 7
+            },
+            0x78 => { // MOV A,B
+                self.a = self.b;
+                5
             },
             0x79 => { // MOV A,C
                 self.a = self.c;
@@ -534,33 +638,75 @@ impl Cpu {
                 5
             },
             0x7e => { // MOV A,M
-                let addr = (self.h as u16) << 8 | (self.l as u16);
-                self.a = self.mem.read(addr);
+                self.a = self.read_from_hl();
                 7
             },
             0x7f => { // MOV A,A
                 5
             },
-            // 0x80 => { // ADD B
-            //     let result = self.a as u16 + self.b as u16;
-            //     self.cc.update(result);
-            //     // store result in register A
-            //     self.a = (result & 0xff) as u8;
-            // },
-            0x82 => { // ADD D
-                let x = (self.a as u16) + (self.d as u16);
+            0x80 => { // ADD B
+                let x = self.a as u16 + self.b as u16;
                 self.set_flags_arith(x);
                 self.a = x as u8;
                 4
             },
-            0x87 => { // ADD A
-                let x = (self.a as u16) + (self.a as u16);
+            0x81 => { // ADD C
+                let x = self.a as u16 + self.c as u16;
                 self.set_flags_arith(x);
                 self.a = x as u8;
                 4
+            }
+            0x82 => { // ADD D
+                let x = self.a as u16 + self.d as u16;
+                self.set_flags_arith(x);
+                self.a = x as u8;
+                4
+            },
+            0x85 => { // ADD L
+                let x = self.a as u16 + self.l as u16;
+                self.set_flags_arith(x);
+                self.a = x as u8;
+                4
+            },
+            0x86 => { // ADD M
+                let a = self.a as u16 + self.read_from_hl() as u16;
+                self.set_flags_arith(a);
+                self.a = a as u8;
+                7
+            },
+            0x87 => { // ADD A
+                let x = self.a as u16 + self.a as u16;
+                self.set_flags_arith(x);
+                self.a = x as u8;
+                4
+            },
+            0x97 => { // SUB A
+                // TODO: could just set to 0
+                let x = self.a as u16 - self.a as u16;
+                self.set_flags_arith(x);
+                self.a = x as u8;
+                4
+            },
+            0xa0 => { // ANA B
+                let a = self.a & self.b;
+                self.set_flags_logic(a);
+                self.a = a;
+                4
+            },
+            0xa6 => { // ANA M
+                let a = self.a & self.read_from_hl();
+                self.set_flags_logic(a);
+                self.a = a;
+                7
             },
             0xa7 => { // ANA A
                 let a = self.a & self.a;
+                self.set_flags_logic(a);
+                self.a = a;
+                4
+            },
+            0xa8 => { // XRA B
+                let a = self.a ^ self.b;
                 self.set_flags_logic(a);
                 self.a = a;
                 4
@@ -583,12 +729,28 @@ impl Cpu {
                 self.a = a;
                 4
             },
+            0xb4 => { // ORA H
+                let a = self.a | self.h;
+                self.set_flags_logic(a);
+                self.a = a;
+                4
+            },
             0xb6 => { // ORA M
                 let x = self.read_from_hl();
                 let a = self.a | x;
                 self.set_flags_logic(a);
                 self.a = a;
                 7
+            },
+            0xb8 => { // CMP B
+                let x = self.a as u16 - self.b as u16;
+                self.set_flags_arith(x);
+                4
+            },
+            0xbc => { // CMP H
+                let x = self.a as u16 - self.h as u16;
+                self.set_flags_arith(x);
+                4
             },
             0xbe => { // CMP M
                 let x = self.read_from_hl();
@@ -625,6 +787,15 @@ impl Cpu {
                 // the program counter at the end of the method.
                 return 10;
             },
+            0xc4 => { // CNZ addr
+                if self.cc.z == 0 {
+                    self.call();
+                    return 17;
+                } else {
+                    self.pc += 2;
+                }
+                11
+            },
             0xc5 => { // PUSH B
                 let (lo, hi) = (self.c, self.b);
                 self.push(lo, hi);
@@ -658,12 +829,17 @@ impl Cpu {
                 }
                 10
             },
+            0xcc => { // CZ addr
+                if self.cc.z == 1 {
+                    self.call();
+                    return 17;
+                } else {
+                    self.pc += 2;
+                }
+                11
+            },
             0xcd => { // CALL addr
-                // Push return address on to stack
-                let ret = self.pc + 3;
-                let (lo, hi) = split_u16(ret);
-                self.push(lo, hi);
-                self.pc = self.read_u16();
+                self.call();
                 return 17;
             },
             0xd0 => { // RNC
@@ -693,6 +869,15 @@ impl Cpu {
                 let port = self.read_byte();
                 self.ports[port as usize] = self.a;
                 10
+            },
+            0xd4 => { // CNC addr
+                if self.cc.cy == 0 {
+                    self.call();
+                    return 17;
+                } else {
+                    self.pc += 2;
+                }
+                11
             },
             0xd5 => { // PUSH D
                 let (lo, hi) = (self.e, self.d);
@@ -728,11 +913,27 @@ impl Cpu {
                 self.a = self.ports[port as usize];
                 10
             },
+            0xde => { // SBI D8
+                let x = self.read_byte();
+                let a = self.a as u16 - x as u16 - self.cc.cy as u16;
+                self.set_flags_arith(a);
+                self.a = a as u8;
+                7
+            },
             0xe1 => { // POP H
                 let (lo, hi) = self.pop();
                 self.l = lo;
                 self.h = hi;
                 10
+            },
+            0xe3 => { // XTHL
+                let l = self.l;
+                let h = self.h;
+                self.l = self.mem.read(self.sp);
+                self.h = self.mem.read(self.sp + 1);
+                self.mem.write(self.sp, l);
+                self.mem.write(self.sp + 1, h);
+                18
             },
             0xe5 => { // PUSH H
                 let (lo, hi) = (self.l, self.h);
@@ -745,6 +946,10 @@ impl Cpu {
                 self.set_flags_logic(a);
                 self.a = a;
                 7
+            },
+            0xe9 => { // PCHL
+                self.pc = make_u16(self.l, self.h);
+                return 5;
             },
             0xeb => { // XCHG
                 mem::swap(&mut self.e, &mut self.l);
@@ -773,6 +978,12 @@ impl Cpu {
                 self.mem.write(self.sp - 2, psw);
                 self.sp -= 2;
                 11
+            },
+            0xf6 => { // ORI D8
+                let a = self.a | self.read_byte();
+                self.set_flags_logic(a);
+                self.a = a;
+                7
             },
             0xfa => { // JM addr
                 if self.cc.s == 1 {

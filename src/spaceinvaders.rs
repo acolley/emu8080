@@ -284,9 +284,8 @@ impl SpaceInvadersMachine {
     }
 
     pub fn run(&mut self) {
-        let mut i = 0usize;
-
-        let sixtieth_of_second_ns = ((1.0f64 / 60.0f64) * 1_000_000_000.0) as u64;
+        let sixtieth_of_second_ns = (((1.0f64 / 60.0f64) * 1_000_000_000.0)) as u64;
+        let one_hundred_twentieth_of_second_ns = ((((1.0f64 / 60.0f64) * 1_000_000_000.0)) / 2.0) as u64;
 
         // Nanoseconds per cycle
         let ns_per_cycle = ((1.0 / (self.cpu.speed as f64)) * 1_000_000_000.0) as u32;
@@ -298,7 +297,7 @@ impl SpaceInvadersMachine {
         let mut last_interrupt_time_ns = self.time;
 
         // The next interrupt code to be used
-        let mut next_int = 2;
+        let mut next_int = 1;
 
         let mut code_time = 0;
 
@@ -306,23 +305,20 @@ impl SpaceInvadersMachine {
             last_real_time = current_real_time;
             current_real_time = time::precise_time_ns();
             code_time += current_real_time - last_real_time;
-            // print!("{}: ", i);
             let cycles = self.step();
 
             self.time += (cycles * ns_per_cycle) as u64;
 
-            i += 1;
-
-            // Interrupt after a sixtieth of a second of simulated time
-            // Since this is when it is expecting to be interrupted.
-            if self.cpu.interrupt_enabled && self.time - last_interrupt_time_ns >= sixtieth_of_second_ns {
+            if self.cpu.interrupt_enabled && self.time - last_interrupt_time_ns >= one_hundred_twentieth_of_second_ns {
                 // VBlank interrupt
                 self.interrupt(next_int);
                 next_int = if next_int == 2 { 1 } else { 2 };
                 last_interrupt_time_ns = self.time;
 
-                // TODO: move drawing somewhere else?
-                self.draw();
+                // only draw at 1/60 of a second
+                if next_int == 1 {
+                    self.draw();
+                }
             }
 
             // Only poll events every sixtieth of a second in real time
@@ -355,7 +351,14 @@ impl SpaceInvadersMachine {
                             } else {
                                 self.cpu.ports[1] &= !0x01;
                             }
-                        }
+                        },
+                        Event::KeyboardInput(state, _, Some(VirtualKeyCode::Space)) => { // P1 Start
+                            if state == Pressed {
+                                self.cpu.ports[1] |= 0x04;
+                            } else {
+                                self.cpu.ports[1] &= !0x04;
+                            }
+                        },
                         // Event::KeyboardInput(state, _, Some(VirtualKeyCode::Up)) => input.up = state == Pressed,
                         // Event::KeyboardInput(state, _, Some(VirtualKeyCode::Down)) => input.down = state == Pressed,
                         _ => {}
@@ -374,9 +377,6 @@ impl Machine for SpaceInvadersMachine {
     #[inline(always)]
     fn step(&mut self) -> u32 {
         let op = self.cpu.mem.read(self.cpu.pc);
-        // println!("pc: {:>0padpc$x}, op: {:>0padop$x}", self.cpu.pc, op, padpc=4, padop=2);
-        // println!("pc: {:>0padpc$x} a: {:>0pad$x} b: {:>0pad$x} c: {:>0pad$x} d: {:>0pad$x} e: {:>0pad$x} h: {:>0pad$x} l: {:>0pad$x}", 
-        //     self.cpu.pc, self.cpu.a, self.cpu.b, self.cpu.c, self.cpu.d, self.cpu.e, self.cpu.h, self.cpu.l, padpc=4, pad=2);
         match op {
             0xd3 => { // OUT D8
                 let port = self.cpu.mem.read(self.cpu.pc + 1);
