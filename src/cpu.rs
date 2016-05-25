@@ -438,6 +438,10 @@ impl Cpu {
                 self.b = self.l;
                 5
             },
+            0x46 => { // MOV B,M
+                self.b = self.read_from_hl();
+                7
+            },
             0x48 => { // MOV C,B
                 self.c = self.b;
                 5
@@ -458,8 +462,7 @@ impl Cpu {
                 5
             },
             0x4e => { // MOV C,M
-                let addr = (self.h as u16) << 8 | (self.l as u16);
-                self.c = self.mem.read(addr);
+                self.c = self.read_from_hl();
                 7
             },
             0x4f => { // MOV C,A
@@ -568,15 +571,27 @@ impl Cpu {
                 self.a = a;
                 4
             },
+            0xb0 => { // ORA B
+                let a = self.a | self.b;
+                self.set_flags_logic(a);
+                self.a = a;
+                4
+            },
             0xb3 => { // ORA E
                 let a = self.a | self.e;
                 self.set_flags_logic(a);
                 self.a = a;
                 4
             },
+            0xb6 => { // ORA M
+                let x = self.read_from_hl();
+                let a = self.a | x;
+                self.set_flags_logic(a);
+                self.a = a;
+                7
+            },
             0xbe => { // CMP M
-                let addr = (self.h as u16) << 8 | (self.l as u16);
-                let x = self.mem.read(addr);
+                let x = self.read_from_hl();
                 let res = self.a as u16 - x as u16;
                 self.set_flags_arith(res);
                 7
@@ -616,9 +631,10 @@ impl Cpu {
                 11
             },
             0xc6 => { // ADI D8
-                let x = (self.a as u16) + self.read_byte() as u16;
-                self.set_flags_arith(x);
-                self.a = x as u8;
+                let x = self.read_byte();
+                let a = (self.a as u16).wrapping_add(x as u16);
+                self.set_flags_arith(a);
+                self.a = a as u8;
                 7
             },
             0xc8 => { // RZ
@@ -650,6 +666,14 @@ impl Cpu {
                 self.pc = self.read_u16();
                 return 17;
             },
+            0xd0 => { // RNC
+                if self.cc.cy == 0 {
+                    self.ret();
+                    return 11;
+                } else {
+                    5
+                }
+            },
             0xd1 => { // POP D
                 let (lo, hi) = self.pop();
                 self.e = lo;
@@ -674,6 +698,13 @@ impl Cpu {
                 let (lo, hi) = (self.e, self.d);
                 self.push(lo, hi);
                 11
+            },
+            0xd6 => { // SUI D8
+                let x = self.read_byte();
+                let a = (self.a as u16).wrapping_sub(x as u16);
+                self.set_flags_arith(a);
+                self.a = a as u8;
+                7
             },
             0xd8 => { // RC
                 if self.cc.cy == 1 {
