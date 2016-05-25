@@ -452,6 +452,10 @@ impl Cpu {
                 self.c = self.mem.read(addr);
                 7
             },
+            0x4f => { // MOV C,A
+                self.c = self.a;
+                5
+            },
             0x51 => { // MOV D,C
                 self.d = self.c;
                 5
@@ -651,6 +655,14 @@ impl Cpu {
                 let (lo, hi) = (self.e, self.d);
                 self.push(lo, hi);
                 11
+            },
+            0xd8 => { // RC
+                if self.cc.cy == 1 {
+                    self.ret();
+                    return 11;
+                } else {
+                    5
+                }
             },
             0xda => { // JC addr
                 if self.cc.cy == 1 {
