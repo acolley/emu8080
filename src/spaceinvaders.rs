@@ -366,7 +366,7 @@ impl SpaceInvadersMachine {
                 }
             }
         }
-        println!("Average loop time: {}", (code_time as f64) / (i as f64));
+        // println!("Average loop time: {}", (code_time as f64) / (i as f64));
     }
 }
 
