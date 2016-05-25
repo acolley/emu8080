@@ -1,6 +1,119 @@
+
+use machine::{Reg, RegPair};
+
+// /// A source/target location for an
+// /// instruction.
+// #[derive(Clone, Debug, PartialEq, Eq)]
+// enum Loc {
+//     Mem,
+//     Reg(Reg),
+// }
+
+// #[derive(Clone, Debug, PartialEq, Eq)]
+// pub enum OpCode {
+//     NOP,
+//     LXI(RegPair, u8, u8),
+//     STAX(RegPair),
+//     INX(RegPair),
+//     INR(Reg),
+//     DCR(Reg),
+//     MVI(Reg, u8),
+//     RLC,
+//     RRC,
+//     RAL,
+//     RAR,
+//     RIM,
+//     DAD(RegPair),
+//     LDAX(RegPair),
+//     DCX(RegPair),
+//     SHLD,
+//     LHLD,
+//     DAA,
+//     CMA,
+//     CMC,
+//     STA,
+//     STC,
+//     MOV(Loc, Loc),
+//     ADD(Loc),
+//     SUB(Loc),
+//     ANA(Loc),
+//     XRA(Loc),
+//     ORA(Loc),
+//     CMP(Loc),
+//     RNZ,
+//     POP(RegPair),
+// }
+
+// impl OpCode {
+//     /// The number of bytes this instruction uses.
+//     pub fn bytes(&self) -> usize {
+//         match *self {
+//             NOP => 1,
+//             LXI(_, _, _) => 3,
+//             STAX(_) => 1,
+//             INX(_) => 1,
+//             INR(_) => 1,
+//             DCR(_) => 1,
+//             MVI(_, _) => 2,
+//             RLC => 1,
+//             RRC => 1,
+//             RAL => 1,
+//             RAR => 1,
+//             RIM => 1
+//             DAD(_) => 1,
+//             LDAX(_) => 1,
+//             DCX(_) => 1,
+//             SHLD => 1,
+//             LHLD => 1,
+//             DAA => 1,
+//             CMA => 1,
+//             CMC => 1,
+//             STA => 1,
+//             STC => 1,
+//             MOV(_, _) => 1,
+//             ADD(_) => 1,
+//             SUB(_) => 1,
+//             ANA(_) => 1,
+//             XRA(_) => 1,
+//             ORA(_) => 1,
+//             CMP(_) => 1,
+//             RNZ => 1,
+//             POP(_) => 1,
+//         }
+//     }
+// }
+
+// fn disassemble_op(bytes: &[u8], pc: usize) -> OpCode {
+//     let op = bytes[pc];
+//     match op {
+//         0x00 => OpCode::NOP,
+//         0x01 => {
+//             let lo = bytes[pc + 1];
+//             let hi = bytes[pc + 2];
+//             OpCode::LXI(RegPair::BC, lo, hi)
+//         },
+//         0x02 => {
+//             OpCode::STAX(RegPair::BC)
+//         },
+//         0x03 => {
+//             OpCode::INX(RegPair::BC)
+//         },
+//         0x04 => {
+//             OpCode::INR(RegPair::BC)
+//         },
+//         0x05 => {
+//             OpCode::DCR(RegPair::BC)
+//         },
+//         0x06 => {
+//             let x = bytes[pc + 1];
+//             OpCode::MVI(Reg::B, x)
+//         },
+//     }
+// }
+
 /// Disassemble the given compiled 8080 binary
 /// code in `bytes`.
-/// `offset` is where the the first instruction
+/// `offset` is where the first instruction
 /// starts in memory.
 pub fn disassemble(bytes: &[u8], offset: usize) {
     let mut pc = 0;

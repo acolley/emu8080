@@ -1,4 +1,8 @@
 
+use std::mem;
+
+use memory::Memory;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConditionCodes {
     z: u8, // Zero
@@ -22,39 +26,6 @@ impl ConditionCodes {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Memory(Vec<u8>);
-
-impl Memory {
-    pub fn with_data(data: &[u8]) -> Self {
-        Self::with_data_and_offset(data, 0)
-    }
-
-    pub fn with_data_and_offset(data: &[u8], offset: usize) -> Self {
-        let mut mem = Vec::with_capacity(65536);
-        mem.resize(65536, 0);
-        for (i, x) in data.iter().enumerate() {
-            mem[i + offset] = x.clone();
-        }
-        Memory(mem)
-    }
-
-    #[inline(always)]
-    pub fn read(&self, addr: u16) -> u8 {
-        let Memory(ref mem) = *self;
-        mem[addr as usize]
-    }
-
-    #[inline(always)]
-    pub fn write(&mut self, addr: u16, d: u8) {
-        if addr < 0x2000 {
-            panic!("Trying to write {:>0padd$x} to ROM at: {:>0pada$x}", d, addr, padd=2, pada=4);
-        }
-        let Memory(ref mut mem) = *self;
-        mem[addr as usize] = d;
-    }
-}
-
 #[inline(always)]
 fn parity(x: u8, size: u8) -> u8 {
     let mut p = 0;
@@ -67,6 +38,16 @@ fn parity(x: u8, size: u8) -> u8 {
     }
 
     if (p & 0x1) == 0 { 1 } else { 0 }
+}
+
+#[inline(always)]
+fn make_u16(lo: u8, hi: u8) -> u16 {
+    (hi as u16) << 8 | lo as u16
+}
+
+#[inline(always)]
+fn make_u32(lo: u8, hi: u8) -> u32 {
+    (hi as u32) << 8 | lo as u32
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -88,11 +69,7 @@ pub struct Cpu {
 }
 
 impl Cpu {
-    pub fn with_data(data: &[u8]) -> Self {
-        Self::with_data_and_offset(data, 0)
-    }
-
-    pub fn with_data_and_offset(data: &[u8], offset: usize) -> Self {
+    pub fn new(memory: Memory) -> Self {
         Cpu {
             a: 0x00,
             b: 0x00,
@@ -103,7 +80,7 @@ impl Cpu {
             l: 0x00,
             sp: 0x0000,
             pc: 0x0000,
-            mem: Memory::with_data_and_offset(data, offset),
+            mem: memory,
             cc: ConditionCodes::new(),
             interrupt_enabled: false,
             ports: [0; 8],
@@ -125,6 +102,59 @@ impl Cpu {
         (self.mem.read(self.sp - 1), self.mem.read(self.sp - 2))
     }
 
+    /// Read a data byte and increment PC.
+    #[inline(always)]
+    fn read_byte(&mut self) -> u8 {
+        let x = self.mem.read(self.pc + 1);
+        self.pc += 1;
+        x
+    }
+
+    /// Read (lo, hi) bytes and increment PC.
+    #[inline(always)]
+    fn read_two_bytes(&mut self) -> (u8, u8) {
+        let lo = self.mem.read(self.pc + 1);
+        let hi = self.mem.read(self.pc + 2);
+        self.pc += 2;
+        (lo, hi)
+    }
+
+    #[inline(always)]
+    fn read_u16(&mut self) -> u16 {
+        let lo = self.mem.read(self.pc + 1);
+        let hi = self.mem.read(self.pc + 2);
+        self.pc += 2;
+        make_u16(lo, hi)
+    }
+
+    /// Read from the memory address given
+    /// by the bytes held in the H & L registers.
+    #[inline(always)]
+    fn read_from_hl(&self) -> u8 {
+        let addr = make_u16(self.l, self.h);
+        self.mem.read(addr)
+    }
+
+    #[inline(always)]
+    fn set_flags_zsp(&mut self, x: u8) {
+        self.cc.z = if x == 0 { 1 } else { 0 };
+        self.cc.s = if (x & 0x80 == 0x80) { 1 } else { 0 };
+        self.cc.p = parity(x, 8);
+    }
+
+    #[inline(always)]
+    fn set_flags_arith(&mut self, x: u16) {
+        self.set_flags_zsp(x as u8);
+        self.cc.cy = if x > 0xff { 1 } else { 0 };
+    }
+
+    #[inline(always)]
+    fn set_flags_logic(&mut self, x: u8) {
+        self.set_flags_zsp(x);
+        self.cc.cy = 0;
+        self.cc.ac = 0;
+    }
+
     /// Read a byte from memory at the address pointed to
     /// by PC and execute the OpCode given by that byte.
     /// Return the number of clock cycles used by that op.
@@ -134,43 +164,37 @@ impl Cpu {
         let cycles = match op {
             0x00 => { 4 }, // NOP
             0x01 => { // LXI B,word
-                self.c = self.mem.read(self.pc + 1);
-                self.b = self.mem.read(self.pc + 2);
-                self.pc += 2;
+                let (c, b) = self.read_two_bytes();
+                self.c = c;
+                self.b = b;
                 10
             },
             0x02 => { // STAX B
-                let addr = (self.c as u16) << 8 | (self.b as u16);
+                let addr = make_u16(self.b, self.c);
                 self.a = self.mem.read(addr);
                 7
             },
             0x03 => { // INX B
-                let bc = (self.c as u16) << 8 | (self.b as u16);
-                let bc = bc.wrapping_add(1);
-                self.b = (bc & 0xff) as u8;
-                self.c = ((bc & 0xff00) >> 8) as u8;
+                self.c = self.c.wrapping_add(1);
+                if self.c == 0 {
+                    self.b = self.b.wrapping_add(1);
+                }
                 5
             },
             0x04 => { // INR B
                 let b = self.b.wrapping_add(1);
-                self.cc.z = if b == 0 { 1 } else { 0 };
-                self.cc.s = if (b & 0x80) == 0x80 { 1 } else { 0 };
-                self.cc.p = parity(b, 8);
+                self.set_flags_zsp(b);
                 self.b = b;
                 5
             },
             0x05 => { // DCR B
                 let b = self.b.wrapping_sub(1);
-                self.cc.z = if b == 0 { 1 } else { 0 };
-                self.cc.s = if (b & 0x80) == 0x80 { 1 } else { 0 };
-                self.cc.p = parity(b, 8);
+                self.set_flags_zsp(b);
                 self.b = b;
                 5
             },
             0x06 => { // MVI B,D8
-                let x = self.mem.read(self.pc + 1);
-                self.b = x;
-                self.pc += 1;
+                self.b = self.read_byte();
                 7
             },
             0x09 => { // DAD B
@@ -188,24 +212,20 @@ impl Cpu {
                 7
             },
             0x0b => { // DCX B
-                let bc = (self.b as u16) << 8 | (self.c as u16);
-                let bc = bc.wrapping_sub(1);
-                self.e = (bc & 0xff) as u8;
-                self.d = ((bc & 0xff00) >> 8) as u8;
+                self.c = self.c.wrapping_sub(1);
+                if self.c == 0xff {
+                    self.b = self.b.wrapping_sub(1);
+                }
                 5
             },
             0x0d => { // DCR C
                 let c = self.c.wrapping_sub(1);
-                self.cc.z = if c == 0 { 1 } else { 0 };
-                self.cc.s = if (c & 0x80) == 0x80 { 1 } else { 0 };
-                self.cc.p = parity(c, 8);
+                self.set_flags_zsp(c);
                 self.c = c;
                 5
             },
             0x0e => { // MVI C,D8
-                let x = self.mem.read(self.pc + 1);
-                self.c = x;
-                self.pc += 1;
+                self.c = self.read_byte();
                 7
             },
             0x0f => { // RRC
@@ -218,28 +238,24 @@ impl Cpu {
                 4
             },
             0x11 => { // LXI D16,D16
-                let d = self.mem.read(self.pc + 2);
-                let e = self.mem.read(self.pc + 1);
+                let (e, d) = self.read_two_bytes();
                 self.d = d;
                 self.e = e;
-                self.pc += 2;
                 10
             },
             0x13 => { // INX D
-                let de = (self.d as u16) << 8 | (self.e as u16);
-                let de = de.wrapping_add(1);
-                self.e = (de & 0xff) as u8;
-                self.d = ((de & 0xff00) >> 8) as u8;
+                self.e = self.e.wrapping_add(1);
+                if self.e == 0 {
+                    self.d = self.d.wrapping_add(1);
+                }
                 5
             },
             0x14 => { // INR D
-                self.d = self.d.wrapping_add(1);
-                self.cc.z = if self.d == 0 { 1 } else { 0 };
-                self.cc.s = if (self.d & 0x80) == 0x80 { 1 } else { 0 };
-                self.cc.p = parity(self.d, 8);
+                let d = self.d.wrapping_add(1);
+                self.set_flags_zsp(d);
+                self.d = d;
                 5
             },
-            0x18 => { 0 }, // Nothing?
             0x19 => { // DAD D
                 let de = (self.d as u32) << 8 | (self.e as u32);
                 let hl = (self.h as u32) << 8 | (self.l as u32);
@@ -255,10 +271,10 @@ impl Cpu {
                 7
             },
             0x1b => { // DCX D
-                let de = (self.d as u16) << 8 | (self.e as u16);
-                let de = de.wrapping_sub(1);
-                self.e = (de & 0xff) as u8;
-                self.d = ((de & 0xff00) >> 8) as u8;
+                self.e = self.e.wrapping_sub(1);
+                if self.e == 0xff {
+                    self.d = self.d.wrapping_sub(1);
+                }
                 5
             },
             0x1f => { // RAR
@@ -273,41 +289,32 @@ impl Cpu {
                 4
             },
             0x21 => { // LXI H,D16
-                let lo = self.mem.read(self.pc + 1);
-                let hi = self.mem.read(self.pc + 2);
+                let (lo, hi) = self.read_two_bytes();
                 self.l = lo;
                 self.h = hi;
-                self.pc += 2;
                 10
             },
             0x22 => { // SHLD addr
-                let lo = self.mem.read(self.pc + 1);
-                let hi = self.mem.read(self.pc + 2);
-                let addr = (hi as u16) << 8 | (lo as u16);
+                let addr = self.read_u16();
                 self.mem.write(addr, self.l);
                 self.mem.write(addr + 1, self.h);
-                self.pc += 2;
                 16
             },
             0x23 => { // INX H
-                let hl = (self.h as u16) << 8 | (self.l as u16);
-                let hl = hl.wrapping_add(1);
-                self.l = (hl & 0xff) as u8;
-                self.h = ((hl & 0xff00) >> 8) as u8;
+                self.l = self.l.wrapping_add(1);
+                if self.l == 0 {
+                    self.h = self.h.wrapping_add(1);
+                }
                 5
             },
             0x24 => { // INR H
                 let h = self.h.wrapping_add(1);
-                self.cc.z = if h == 0 { 1 } else { 0 };
-                self.cc.s = if (h & 0x80) == 0x80 { 1 } else { 0 };
-                self.cc.p = parity(h, 8);
+                self.set_flags_zsp(h);
                 self.h = h;
                 5
             },
             0x26 => { // MVI H,D8
-                let x = self.mem.read(self.pc + 1);
-                self.h = x;
-                self.pc += 1;
+                self.h = self.read_byte();
                 7
             },
             0x27 => { // DAA
@@ -326,10 +333,7 @@ impl Cpu {
                 if self.a & 0xf0 > 0x90 {
                     let res = (self.a as u16) + 0x60;
                     self.a = res as u8;
-                    self.cc.cy = if res > 0xff { 1 } else { 0 };
-                    self.cc.z = if (res & 0xff) == 0 { 1 } else { 0 };
-                    self.cc.s = if (res & 0x80) == 0x80 { 1 } else { 0 };
-                    self.cc.p = parity(res as u8, 8);
+                    self.set_flags_arith(res);
                 }
                 4
             },
@@ -342,34 +346,25 @@ impl Cpu {
                 10
             },
             0x31 => { // LXI SP,D16
-                let lo = self.mem.read(self.pc + 1);
-                let hi = self.mem.read(self.pc + 2);
-                self.sp = (hi as u16) << 8 | (lo as u16);
-                self.pc += 2;
+                self.sp = self.read_u16();
                 10
             },
             0x32 => { // STA addr
-                let lo = self.mem.read(self.pc + 1);
-                let hi = self.mem.read(self.pc + 2);
-                let addr = (hi as u16) << 8 | (lo as u16);
+                let addr = self.read_u16();
                 self.mem.write(addr, self.a);
-                self.pc += 2;
                 13
             },
             0x35 => { // DCR M
                 let hl = (self.h as u16) << 8 | (self.l as u16);
                 let x = self.mem.read(hl).wrapping_sub(1);
-                self.cc.z = if x == 0 { 1 } else { 0 };
-                self.cc.s = if (x & 0x80) == 0x80 { 1 } else { 0 };
-                self.cc.p = parity(x, 8);
+                self.set_flags_zsp(x);
                 self.mem.write(hl, x);
                 10
             },
             0x36 => { // MVI M,D8
-                let x = self.mem.read(self.pc + 1);
+                let x = self.read_byte();
                 let addr = (self.h as u16) << 8 | (self.l as u16);
                 self.mem.write(addr, x);
-                self.pc += 1;
                 10
             },
             0x37 => { // STC
@@ -384,25 +379,18 @@ impl Cpu {
                 10
             },
             0x3a => { // LDA addr
-                let lo = self.mem.read(self.pc + 1);
-                let hi = self.mem.read(self.pc + 2);
-                let addr = (hi as u16) << 8 | (lo as u16);
+                let addr = self.read_u16();
                 self.a = self.mem.read(addr);
-                self.pc += 2;
                 13
             },
             0x3d => { // DCR A
                 let a = self.a.wrapping_sub(1);
-                self.cc.z = if a == 0 { 1 } else { 0 };
-                self.cc.s = if (a & 0x80) == 0x80 { 1 } else { 0 };
-                self.cc.p = parity(a, 8);
+                self.set_flags_zsp(a);
                 self.a = a;
                 5
             },
             0x3e => { // MVI A,D8
-                let x = self.mem.read(self.pc + 1);
-                self.a = x;
-                self.pc += 1;
+                self.a = self.read_byte();
                 7
             },
             0x41 => {  // MOV B,C
@@ -497,6 +485,10 @@ impl Cpu {
                 self.a = self.h;
                 5
             },
+            0x7d => { // MOV A,L
+                self.a = self.l;
+                5
+            },
             0x7e => { // MOV A,M
                 let addr = (self.h as u16) << 8 | (self.l as u16);
                 self.a = self.mem.read(addr);
@@ -513,59 +505,39 @@ impl Cpu {
             // },
             0x82 => { // ADD D
                 let x = (self.a as u16) + (self.d as u16);
-                self.cc.z = if x & 0xff == 0 { 1 } else { 0 };
-                self.cc.s = if x & 0x80 > 0 { 1 } else { 0 };
-                self.cc.cy = if x > 0xff { 1 } else { 0 };
-                self.cc.p = parity((x & 0xff) as u8, 8);
+                self.set_flags_arith(x);
                 self.a = x as u8;
-                self.pc += 1;
                 4
             },
             0x87 => { // ADD A
                 let x = (self.a as u16) + (self.a as u16);
-                self.cc.z = if x & 0xff == 0 { 1 } else { 0 };
-                self.cc.s = if x & 0x80 > 0 { 1 } else { 0 };
-                self.cc.cy = if x > 0xff { 1 } else { 0 };
-                self.cc.p = parity((x & 0xff) as u8, 8);
+                self.set_flags_arith(x);
                 self.a = x as u8;
-                self.pc += 1;
                 4
             },
             0xa7 => { // ANA A
-                self.a = self.a & self.a;
-                self.cc.cy = 0;
-                self.cc.ac = 0;
-                self.cc.z = if self.a == 0 { 1 } else { 0 };
-                self.cc.s = if (self.a & 0x80) == 0x80 { 1 } else { 0 };
-                self.cc.p = parity(self.a, 8);
+                let a = self.a & self.a;
+                self.set_flags_logic(a);
+                self.a = a;
                 4
             },
             0xaf => { // XRA A
-                self.a = self.a ^ self.a;
-                self.cc.cy = 0;
-                self.cc.ac = 0;
-                self.cc.z = if self.a == 0 { 1 } else { 0 };
-                self.cc.s = if (self.a & 0x80) == 0x80 { 1 } else { 0 };
-                self.cc.p = parity(self.a, 8);
+                let a = self.a ^ self.a;
+                self.set_flags_logic(a);
+                self.a = a;
                 4
             },
             0xb3 => { // ORA E
-                self.a = self.a | self.e;
-                self.cc.cy = 0;
-                self.cc.ac = 0;
-                self.cc.z = if self.a == 0 { 1 } else { 0 };
-                self.cc.s = if (self.a & 0x80) == 0x80 { 1 } else { 0 };
-                self.cc.p = parity(self.a, 8);
+                let a = self.a | self.e;
+                self.set_flags_logic(a);
+                self.a = a;
                 4
             },
             0xbe => { // CMP M
                 let addr = (self.h as u16) << 8 | (self.l as u16);
                 let x = self.mem.read(addr);
-                let res = self.a - x;
-                self.cc.cy = if self.a < x { 1 } else { 0 };
-                self.cc.z = if self.a == x { 1 } else { 0 };
-                self.cc.s = if (res & 0x80) == 0x80 { 1 } else { 0 };
-                self.cc.p = parity(res, 8);
+                let res = self.a as u16 - x as u16;
+                self.set_flags_arith(res);
                 7
             },
             0xc0 => { // RNZ
@@ -587,9 +559,7 @@ impl Cpu {
             },
             0xc2 => { // JNZ
                 if self.cc.z == 0 {
-                    let lo = self.mem.read(self.pc + 1);
-                    let hi = self.mem.read(self.pc + 2);
-                    self.pc = (hi as u16) << 8 | (lo as u16);
+                    self.pc = self.read_u16();
                     return 10;
                 } else {
                     self.pc += 2;
@@ -597,9 +567,7 @@ impl Cpu {
                 }
             },
             0xc3 => { // JMP addr
-                let lo = self.mem.read(self.pc + 1);
-                let hi = self.mem.read(self.pc + 2);
-                self.pc = (hi as u16) << 8 | (lo as u16);
+                self.pc = self.read_u16();
                 // Return here so we don't increment
                 // the program counter at the end of the method.
                 return 10;
@@ -611,17 +579,9 @@ impl Cpu {
                 11
             },
             0xc6 => { // ADI D8
-                let x = (self.a as u16) + self.mem.read(self.pc + 1) as u16;
-                // If x is zero, set zero flag to 1, else 0.
-                self.cc.z = if x & 0xff == 0 { 1 } else { 0 };
-                // Sign flag: if bit 7 is set, set the flag, else clear.
-                self.cc.s = if x & 0x80 > 0 { 1 } else { 0 };
-                // Carry flag
-                self.cc.cy = if x > 0xff { 1 } else { 0 };               
-                // Parity flag
-                self.cc.p = parity((x & 0xff) as u8, 8);
+                let x = (self.a as u16) + self.read_byte() as u16;
+                self.set_flags_arith(x);
                 self.a = x as u8;
-                self.pc += 1;
                 7
             },
             0xc8 => { // RZ
@@ -644,9 +604,7 @@ impl Cpu {
             },
             0xca => { // JZ addr
                 if self.cc.z == 1 {
-                    let lo = self.mem.read(self.pc + 1);
-                    let hi = self.mem.read(self.pc + 2);
-                    self.pc = (hi as u16) << 8 | (lo as u16);
+                    self.pc = self.read_u16();
                     return 10;
                 } else {
                     10
@@ -659,10 +617,8 @@ impl Cpu {
                 let hi = ((ret & 0xff00) >> 8) as u8;
                 self.mem.write(self.sp - 1, hi);
                 self.mem.write(self.sp - 2, lo);
-                let lo = self.mem.read(self.pc + 1);
-                let hi = self.mem.read(self.pc + 2);
                 self.sp -= 2;
-                self.pc = (hi as u16) << 8 | (lo as u16);
+                self.pc = self.read_u16();
                 return 17;
             },
             0xd1 => { // POP D
@@ -673,9 +629,7 @@ impl Cpu {
             },
             0xd2 => { // JNC addr
                 if self.cc.cy == 0 {
-                    let lo = self.mem.read(self.pc + 1);
-                    let hi = self.mem.read(self.pc + 2);
-                    self.pc = (hi as u16) << 8 | (lo as u16);
+                    self.pc = self.read_u16();
                     return 10;
                 } else {
                     self.pc += 2;
@@ -683,9 +637,8 @@ impl Cpu {
                 10
             },
             0xd3 => { // OUT D8
-                let port = self.mem.read(self.pc + 1);
+                let port = self.read_byte();
                 self.ports[port as usize] = self.a;
-                self.pc += 1;
                 10
             },
             0xd5 => { // PUSH D
@@ -696,9 +649,7 @@ impl Cpu {
             },
             0xda => { // JC addr
                 if self.cc.cy == 1 {
-                    let lo = self.mem.read(self.pc + 1);
-                    let hi = self.mem.read(self.pc + 2);
-                    self.pc = (hi as u16) << 8 | (lo as u16);
+                    self.pc = self.read_u16();
                     return 10;
                 } else {
                     self.pc += 2;
@@ -706,9 +657,8 @@ impl Cpu {
                 10
             },
             0xdb => { // IN port
-                let port = self.mem.read(self.pc + 1);
+                let port = self.read_byte();
                 self.a = self.ports[port as usize];
-                self.pc += 1;
                 10
             },
             0xe1 => { // POP H
@@ -724,22 +674,15 @@ impl Cpu {
                 11
             },
             0xe6 => { // ANI D8
-                let x = self.mem.read(self.pc + 1);
-                self.a = self.a & x;
-                self.cc.cy = 0;
-                self.cc.ac = 0;
-                self.cc.z = if self.a == 0 { 1 } else { 0 };
-                self.cc.s = if (self.a & 0x80) == 0x80 { 1 } else { 0 };
-                self.pc += 1;
+                let x = self.read_byte();
+                let a = self.a & x;
+                self.set_flags_logic(a);
+                self.a = a;
                 7
             },
             0xeb => { // XCHG
-                let d = self.d;
-                let e = self.e;
-                self.d = self.h;
-                self.e = self.l;
-                self.h = d;
-                self.l = e;
+                mem::swap(&mut self.e, &mut self.l);
+                mem::swap(&mut self.d, &mut self.h);
                 4
             },
             0xf1 => { // POP PSW
@@ -770,16 +713,13 @@ impl Cpu {
                 4
             },
             0xfe => { // CPI D8
-                let x = self.mem.read(self.pc + 1);
+                let x = self.read_byte();
                 let y = self.a.wrapping_sub(x);
-                self.cc.z = if y == 0 { 1 } else { 0 };
-                self.cc.s = if y & 0x08 == 0x08 { 1 } else { 0 };
-                self.cc.p = parity(x, 8);
+                self.set_flags_zsp(y);
                 self.cc.cy = if self.a < x { 1 } else { 0 };
-                self.pc += 1;
                 7
             },
-            x => panic!("Unimplemented Op code: {:>0pad$x}", x, pad=2)
+            x => panic!("Unimplemented OpCode: {:>0pad$x}", x, pad=2)
         };
         self.pc += 1;
         cycles

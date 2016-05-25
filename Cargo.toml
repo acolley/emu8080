@@ -4,9 +4,9 @@ version = "0.1.0"
 authors = ["acolley <alnessy@hotmail.com>"]
 
 [dependencies]
-clap = "2.3.0"
+clap = "2.5.1"
 glium = "0.14.0"
-nom = "1.2.2"
+nom = "1.2.3"
 time = "0.1.35"
 
 [profile.dev]

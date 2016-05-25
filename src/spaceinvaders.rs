@@ -12,6 +12,8 @@ use glium::uniforms::{MagnifySamplerFilter, MinifySamplerFilter};
 use time;
 
 use cpu::Cpu;
+use machine::Machine;
+use memory::Memory;
 
 #[derive(Copy, Clone)]
 struct Vertex {
@@ -169,8 +171,9 @@ impl SpaceInvadersMachine {
             row.resize(WIDTH as usize, (0x00, 0x00, 0x00));
             vbuffer.push(row);
         }
+        let memory = Memory::with_data(data);
         SpaceInvadersMachine {
-            cpu: Cpu::with_data(data),
+            cpu: Cpu::new(memory),
             time: 0,
             shiftx: 0,
             shifty: 0,
@@ -181,49 +184,6 @@ impl SpaceInvadersMachine {
             vertex_buffer: vertex_buffer,
             index_buffer: index_buffer,
             vbuffer: vbuffer,
-        }
-    }
-
-    /// Step through a single instruction.
-    /// Returns the number of clock cycles
-    /// required for the instruction processed.
-    #[inline(always)]
-    pub fn step(&mut self) -> u32 {
-        let op = self.cpu.mem.read(self.cpu.pc);
-        // println!("pc: {:>0padpc$x}, op: {:>0padop$x}", self.cpu.pc, op, padpc=4, padop=2);
-        // println!("pc: {:>0padpc$x} a: {:>0pad$x} b: {:>0pad$x} c: {:>0pad$x} d: {:>0pad$x} e: {:>0pad$x} h: {:>0pad$x} l: {:>0pad$x}", 
-        //     self.cpu.pc, self.cpu.a, self.cpu.b, self.cpu.c, self.cpu.d, self.cpu.e, self.cpu.h, self.cpu.l, padpc=4, pad=2);
-        match op {
-            0xd3 => { // OUT D8
-                let port = self.cpu.mem.read(self.cpu.pc + 1);
-                let value = self.cpu.a;
-                self.cpu.ports[port as usize] = value;
-                match port {
-                    2 => self.shift_offset = value & 0x7,
-                    4 => {
-                        self.shifty = self.shiftx;
-                        self.shiftx = value;
-                    },
-                    _ => {}
-                }
-                self.cpu.pc += 2;
-                10
-            },
-            0xdb => { // IN D8
-                let port = self.cpu.mem.read(self.cpu.pc + 1);
-                self.cpu.a = match port {
-                    0 => 1,
-                    1 => self.cpu.ports[1],
-                    3 => {
-                        let value = (self.shifty as u16) << 8 | self.shiftx as u16;
-                        ((value >> (8 - self.shift_offset)) & 0xff) as u8
-                    },
-                    _ => self.cpu.a,
-                };
-                self.cpu.pc += 2;
-                10
-            },
-            _ => self.cpu.step()
         }
     }
 
@@ -323,19 +283,6 @@ impl SpaceInvadersMachine {
         frame.finish().unwrap();
     }
 
-    #[inline(always)]
-    pub fn interrupt(&mut self, int: usize) {
-        // TODO: interrupt code should be an enum?
-        // PUSH PC
-        let hi = ((self.cpu.pc & 0xff00) >> 8) as u8;
-        let lo = (self.cpu.pc & 0xff) as u8;
-        self.cpu.push(hi, lo);
-        // Set PC to low memory vector
-        // This is identical to a an `RST int` instruction
-        self.cpu.pc = (8 * int) as u16;
-        self.cpu.interrupt_enabled = false;
-    }
-
     pub fn run(&mut self) {
         let mut i = 0usize;
 
@@ -417,5 +364,113 @@ impl SpaceInvadersMachine {
             }
         }
         println!("Average loop time: {}", (code_time as f64) / (i as f64));
+    }
+}
+
+impl Machine for SpaceInvadersMachine {
+    /// Step through a single instruction.
+    /// Returns the number of clock cycles
+    /// required for the instruction processed.
+    #[inline(always)]
+    fn step(&mut self) -> u32 {
+        let op = self.cpu.mem.read(self.cpu.pc);
+        // println!("pc: {:>0padpc$x}, op: {:>0padop$x} pt: {:>0padpt$b}", self.cpu.pc, op, self.cpu.ports[1], padpc=4, padop=2, padpt=8);
+        // println!("pc: {:>0padpc$x} a: {:>0pad$x} b: {:>0pad$x} c: {:>0pad$x} d: {:>0pad$x} e: {:>0pad$x} h: {:>0pad$x} l: {:>0pad$x}", 
+        //     self.cpu.pc, self.cpu.a, self.cpu.b, self.cpu.c, self.cpu.d, self.cpu.e, self.cpu.h, self.cpu.l, padpc=4, pad=2);
+        match op {
+            0xd3 => { // OUT D8
+                let port = self.cpu.mem.read(self.cpu.pc + 1);
+                let value = self.cpu.a;
+                // self.cpu.ports[port as usize] = value;
+                match port {
+                    2 => self.shift_offset = value & 0x7,
+                    4 => {
+                        self.shifty = self.shiftx;
+                        self.shiftx = value;
+                    },
+                    _ => {}
+                }
+                self.cpu.pc += 2;
+                10
+            },
+            0xdb => { // IN D8
+                let port = self.cpu.mem.read(self.cpu.pc + 1);
+                self.cpu.a = match port {
+                    0 => 1,
+                    1 => self.cpu.ports[1],
+                    3 => {
+                        let value = (self.shifty as u16) << 8 | self.shiftx as u16;
+                        ((value >> (8 - self.shift_offset)) & 0xff) as u8
+                    },
+                    _ => self.cpu.ports[port as usize],
+                };
+                self.cpu.pc += 2;
+                10
+            },
+            _ => self.cpu.step()
+        }
+    }
+
+    #[inline(always)]
+    fn interrupt(&mut self, int: usize) {
+        // TODO: interrupt code should be an enum?
+        // PUSH PC
+        let hi = ((self.cpu.pc & 0xff00) >> 8) as u8;
+        let lo = (self.cpu.pc & 0xff) as u8;
+        self.cpu.push(hi, lo);
+        // Set PC to low memory vector
+        // This is identical to a an `RST int` instruction
+        self.cpu.pc = (8 * int) as u16;
+        self.cpu.interrupt_enabled = false;
+    }
+
+    #[inline(always)]
+    fn get_pc(&self) -> u16 {
+        self.cpu.pc
+    }
+
+    #[inline(always)]
+    fn get_a(&self) -> u8 { self.cpu.a }
+    #[inline(always)]
+    fn set_a(&mut self, value: u8) { self.cpu.a = value; }
+
+    #[inline(always)]
+    fn get_b(&self) -> u8 { self.cpu.b }
+    #[inline(always)]
+    fn set_b(&mut self, value: u8) { self.cpu.b = value; }
+
+    #[inline(always)]
+    fn get_c(&self) -> u8 { self.cpu.c }
+    #[inline(always)]
+    fn set_c(&mut self, value: u8) { self.cpu.c = value; }
+
+    #[inline(always)]
+    fn get_d(&self) -> u8 { self.cpu.d }
+    #[inline(always)]
+    fn set_d(&mut self, value: u8) { self.cpu.d = value; }
+
+    #[inline(always)]
+    fn get_e(&self) -> u8 { self.cpu.e }
+    #[inline(always)]
+    fn set_e(&mut self, value: u8) { self.cpu.e = value; }
+
+    #[inline(always)]
+    fn get_h(&self) -> u8 { self.cpu.h }
+    #[inline(always)]
+    fn set_h(&mut self, value: u8) { self.cpu.h = value; }
+
+    #[inline(always)]
+    fn get_l(&self) -> u8 { self.cpu.l }
+    #[inline(always)]
+    fn set_l(&mut self, value: u8) { self.cpu.l = value; }
+
+    #[inline(always)]
+    fn read(&self, addr: u16) -> u8 {
+        self.cpu.mem.read(addr)
+    }
+
+    #[inline(always)]
+    fn write(&mut self, addr: u16, value: u8) {
+        self.cpu.mem.write(addr, value);
     }
 }
