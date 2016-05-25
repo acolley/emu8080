@@ -89,17 +89,27 @@ impl Cpu {
     }
 
     #[inline(always)]
-    pub fn push(&mut self, hi: u8, lo: u8) {
+    pub fn push(&mut self, lo: u8, hi: u8) {
         self.mem.write(self.sp - 1, hi);
         self.mem.write(self.sp - 2, lo);
         self.sp -= 2;
     }
 
-    /// Pop (hi, lo) from stack.
+    /// Pop (lo, hi) from stack and increment
+    /// SP as appropriate.
     #[inline(always)]
     pub fn pop(&mut self) -> (u8, u8) {
+        let lo = self.mem.read(self.sp);
+        let hi = self.mem.read(self.sp + 1);
         self.sp += 2;
-        (self.mem.read(self.sp - 1), self.mem.read(self.sp - 2))
+        (lo, hi)
+    }
+
+    /// RET instruction
+    #[inline(always)]
+    fn ret(&mut self) {
+        let (lo, hi) = self.pop();
+        self.pc = make_u16(lo, hi);
     }
 
     /// Read a data byte and increment PC.
@@ -542,10 +552,7 @@ impl Cpu {
             },
             0xc0 => { // RNZ
                 if self.cc.z == 0 {
-                    let lo = self.mem.read(self.sp);
-                    let hi = self.mem.read(self.sp + 1);
-                    self.pc = (hi as u16) << 8 | (lo as u16);
-                    self.sp += 2;
+                    self.ret();
                     return 11;
                 } else {
                     5
@@ -586,20 +593,14 @@ impl Cpu {
             },
             0xc8 => { // RZ
                 if self.cc.z == 1 {
-                    let lo = self.mem.read(self.sp);
-                    let hi = self.mem.read(self.sp + 1);
-                    self.pc = (hi as u16) << 8 | (lo as u16);
-                    self.sp += 2;
+                    self.ret();
                     return 11;
                 } else {
                     5
                 }
             },
             0xc9 => { // RET
-                let lo = self.mem.read(self.sp);
-                let hi = self.mem.read(self.sp + 1);
-                self.pc = (hi as u16) << 8 | (lo as u16);
-                self.sp += 2;
+                self.ret();
                 return 10;
             },
             0xca => { // JZ addr

@@ -417,7 +417,7 @@ impl Machine for SpaceInvadersMachine {
         // PUSH PC
         let hi = ((self.cpu.pc & 0xff00) >> 8) as u8;
         let lo = (self.cpu.pc & 0xff) as u8;
-        self.cpu.push(hi, lo);
+        self.cpu.push(lo, hi);
         // Set PC to low memory vector
         // This is identical to a an `RST int` instruction
         self.cpu.pc = (8 * int) as u16;
