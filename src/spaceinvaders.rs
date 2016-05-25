@@ -9,6 +9,7 @@ use glium::index::PrimitiveType;
 use glium::texture::{MipmapsOption, Texture2dDataSource, UncompressedFloatFormat};
 use glium::uniforms::{MagnifySamplerFilter, MinifySamplerFilter};
 
+use std::thread;
 use time;
 
 use cpu::Cpu;
@@ -301,11 +302,19 @@ impl SpaceInvadersMachine {
 
         let mut code_time = 0;
 
+        let mut cycles = 0;
+
         'main: loop {
             last_real_time = current_real_time;
             current_real_time = time::precise_time_ns();
-            code_time += current_real_time - last_real_time;
-            let cycles = self.step();
+            let instruction_time = current_real_time - last_real_time;
+
+            let sleep_time = (cycles * ns_per_cycle) as i64 - instruction_time as i64;
+            if sleep_time > 0 {
+                thread::sleep(::std::time::Duration::new(0, sleep_time as u32));
+            }
+
+            cycles = self.step();
 
             self.time += (cycles * ns_per_cycle) as u64;
 
@@ -314,11 +323,6 @@ impl SpaceInvadersMachine {
                 self.interrupt(next_int);
                 next_int = if next_int == 2 { 1 } else { 2 };
                 last_interrupt_time_ns = self.time;
-
-                // only draw at 1/60 of a second
-                if next_int == 1 {
-                    self.draw();
-                }
             }
 
             // Only poll events every sixtieth of a second in real time
@@ -364,6 +368,7 @@ impl SpaceInvadersMachine {
                         _ => {}
                     }
                 }
+                self.draw();
             }
         }
         // println!("Average loop time: {}", (code_time as f64) / (i as f64));
