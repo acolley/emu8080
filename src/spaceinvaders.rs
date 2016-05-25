@@ -374,7 +374,7 @@ impl Machine for SpaceInvadersMachine {
     #[inline(always)]
     fn step(&mut self) -> u32 {
         let op = self.cpu.mem.read(self.cpu.pc);
-        // println!("pc: {:>0padpc$x}, op: {:>0padop$x} pt: {:>0padpt$b}", self.cpu.pc, op, self.cpu.ports[1], padpc=4, padop=2, padpt=8);
+        // println!("pc: {:>0padpc$x}, op: {:>0padop$x}", self.cpu.pc, op, padpc=4, padop=2);
         // println!("pc: {:>0padpc$x} a: {:>0pad$x} b: {:>0pad$x} c: {:>0pad$x} d: {:>0pad$x} e: {:>0pad$x} h: {:>0pad$x} l: {:>0pad$x}", 
         //     self.cpu.pc, self.cpu.a, self.cpu.b, self.cpu.c, self.cpu.d, self.cpu.e, self.cpu.h, self.cpu.l, padpc=4, pad=2);
         match op {

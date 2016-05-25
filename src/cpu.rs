@@ -296,6 +296,12 @@ impl Cpu {
                 }
                 5
             },
+            0x1c => { // INR E
+                let e = self.e.wrapping_add(1);
+                self.set_flags_zsp(e);
+                self.e = e;
+                5
+            },
             0x1f => { // RAR
                 // Rotates the carry bit right
                 // and combines it with the value
@@ -363,6 +369,10 @@ impl Cpu {
                 self.h = ((hl & 0xff00) >> 8) as u8;
                 self.cc.cy = if (hl & 0xffff0000) != 0 { 1 } else { 0 };
                 10
+            },
+            0x2e => { // MVI L,D8
+                self.l = self.read_byte();
+                7
             },
             0x31 => { // LXI SP,D16
                 self.sp = self.read_u16();
@@ -478,6 +488,10 @@ impl Cpu {
                 self.e = self.a;
                 5
             },
+            0x60 => { // MOV H,B
+                self.h = self.b;
+                5
+            },
             0x66 => { // MOV H,M
                 let addr = (self.h as u16) << 8 | (self.l as u16);
                 self.h = self.mem.read(addr);
@@ -495,6 +509,10 @@ impl Cpu {
                 let addr = (self.h as u16) << 8 | (self.l as u16);
                 self.mem.write(addr, self.a);
                 7
+            },
+            0x79 => { // MOV A,C
+                self.a = self.c;
+                5
             },
             0x7a => { // MOV A,D
                 self.a = self.d;
@@ -620,8 +638,9 @@ impl Cpu {
                     self.pc = self.read_u16();
                     return 10;
                 } else {
-                    10
+                    self.pc += 2;
                 }
+                10
             },
             0xcd => { // CALL addr
                 // Push return address on to stack
@@ -723,6 +742,15 @@ impl Cpu {
                 self.mem.write(self.sp - 2, psw);
                 self.sp -= 2;
                 11
+            },
+            0xfa => { // JM addr
+                if self.cc.s == 1 {
+                    self.pc = self.read_u16();
+                    return 10;
+                } else {
+                    self.pc += 2;
+                }
+                10
             },
             0xfb => { // EI
                 self.interrupt_enabled = true;
