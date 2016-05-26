@@ -236,8 +236,8 @@ impl Cpu {
                 4
             },
             0x09 => { // DAD B
-                let bc = (self.b as u32) << 8 | (self.c as u32);
-                let hl = (self.h as u32) << 8 | (self.l as u32);
+                let bc = make_u32(self.c, self.b);
+                let hl = make_u32(self.l, self.h);
                 let hl = hl.wrapping_add(bc);
                 self.l = (hl & 0xff) as u8;
                 self.h = ((hl & 0xff00) >> 8) as u8;
@@ -245,7 +245,7 @@ impl Cpu {
                 10
             },
             0x0a => { // LDAX B
-                let addr = (self.b as u16) << 8 | (self.c as u16);
+                let addr = make_u16(self.c, self.b);
                 self.a = self.mem.read(addr);
                 7
             },
@@ -311,8 +311,8 @@ impl Cpu {
                 7
             },
             0x19 => { // DAD D
-                let de = (self.d as u32) << 8 | (self.e as u32);
-                let hl = (self.h as u32) << 8 | (self.l as u32);
+                let de = make_u32(self.e, self.d);
+                let hl = make_u32(self.l, self.h);
                 let hl = hl.wrapping_add(de);
                 self.l = (hl & 0xff) as u8;
                 self.h = ((hl & 0xff00) >> 8) as u8;
@@ -320,7 +320,7 @@ impl Cpu {
                 10
             },
             0x1a => { // LDAX D
-                let addr = (self.d as u16) << 8 | (self.e as u16);
+                let addr = make_u16(self.e, self.d);
                 self.a = self.mem.read(addr);
                 7
             },
@@ -451,7 +451,7 @@ impl Cpu {
                 10
             },
             0x35 => { // DCR M
-                let hl = (self.h as u16) << 8 | (self.l as u16);
+                let hl = make_u16(self.l, self.h);
                 let x = self.mem.read(hl).wrapping_sub(1);
                 self.set_flags_zsp(x);
                 self.mem.write(hl, x);
@@ -459,7 +459,7 @@ impl Cpu {
             },
             0x36 => { // MVI M,D8
                 let x = self.read_byte();
-                let addr = (self.h as u16) << 8 | (self.l as u16);
+                let addr = make_u16(self.l, self.h);
                 self.mem.write(addr, x);
                 10
             },
@@ -468,7 +468,7 @@ impl Cpu {
                 4
             },
             0x39 => { // DAD SP
-                let hl = (self.h as u32) << 8 | (self.l as u32);
+                let hl = make_u32(self.l, self.h);
                 let sp = (self.sp as u32).wrapping_add(hl);
                 self.sp = (sp & 0x0000ffff) as u16;
                 self.cc.cy = if (sp & 0xffff0000) != 0 { 1 } else { 0 };

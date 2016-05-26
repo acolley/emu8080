@@ -259,6 +259,23 @@ impl SpaceInvadersMachine {
             self.texture.write(Rect { left: xmin, bottom: ymin, width: width, height: height }, pixels);
         }
 
+        // let mut pixels = Vec::with_capacity(HEIGHT as usize);
+        // for y in 0..HEIGHT {
+        //     let mut row: Vec<(u8, u8, u8)> = Vec::with_capacity(WIDTH as usize);
+        //     for x in 0..WIDTH {
+        //         let offset = (x * (HEIGHT / 8)) + y / 8;
+        //         let byte = self.cpu.mem.read(0x2400 + (offset as u16));
+        //         let p = y % 8;
+        //         if (byte & (1 << p)) != 0 {
+        //             row.push((0xff, 0xff, 0xff));
+        //         } else {
+        //             row.push((0x00, 0x00, 0x00));
+        //         }
+        //     }
+        //     pixels.push(row);
+        // }
+        // self.texture.write(Rect { left: 0, bottom: 0, width: WIDTH, height: HEIGHT }, pixels);
+
         let sampled = self.texture.sampled()
             .minify_filter(MinifySamplerFilter::Nearest)
             .magnify_filter(MagnifySamplerFilter::Nearest);
@@ -286,7 +303,6 @@ impl SpaceInvadersMachine {
 
     pub fn run(&mut self) {
         let sixtieth_of_second_ns = (((1.0f64 / 60.0f64) * 1_000_000_000.0)) as u64;
-        let one_hundred_twentieth_of_second_ns = ((((1.0f64 / 60.0f64) * 1_000_000_000.0)) / 2.0) as u64;
 
         // Nanoseconds per cycle
         let ns_per_cycle = ((1.0 / (self.cpu.speed as f64)) * 1_000_000_000.0) as u32;
@@ -309,6 +325,8 @@ impl SpaceInvadersMachine {
             current_real_time = time::precise_time_ns();
             let instruction_time = current_real_time - last_real_time;
 
+            // Wait an appropriate amount of time for each
+            // instruction to simulate the real timing of the 8080.
             let sleep_time = (cycles * ns_per_cycle) as i64 - instruction_time as i64;
             if sleep_time > 0 {
                 thread::sleep(::std::time::Duration::new(0, sleep_time as u32));
@@ -318,11 +336,13 @@ impl SpaceInvadersMachine {
 
             self.time += (cycles * ns_per_cycle) as u64;
 
-            if self.cpu.interrupt_enabled && self.time - last_interrupt_time_ns >= one_hundred_twentieth_of_second_ns {
+            if self.cpu.interrupt_enabled && self.time - last_interrupt_time_ns >= sixtieth_of_second_ns {
                 // VBlank interrupt
                 self.interrupt(next_int);
                 next_int = if next_int == 2 { 1 } else { 2 };
                 last_interrupt_time_ns = self.time;
+                
+                self.draw();
             }
 
             // Only poll events every sixtieth of a second in real time
@@ -368,7 +388,6 @@ impl SpaceInvadersMachine {
                         _ => {}
                     }
                 }
-                self.draw();
             }
         }
         // println!("Average loop time: {}", (code_time as f64) / (i as f64));
