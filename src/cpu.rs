@@ -98,6 +98,42 @@ impl Cpu {
     }
 
     #[inline(always)]
+    pub fn bc(&self) -> u16 {
+        make_u16(self.c, self.b)
+    }
+
+    #[inline(always)]
+    pub fn set_bc(&mut self, x: u16) {
+        let (lo, hi) = split_u16(x);
+        self.b = hi;
+        self.c = lo;
+    }
+
+    #[inline(always)]
+    pub fn de(&self) -> u16 {
+        make_u16(self.e, self.d)
+    }
+
+    #[inline(always)]
+    pub fn set_de(&mut self, x: u16) {
+        let (lo, hi) = split_u16(x);
+        self.d = hi;
+        self.e = lo;
+    }
+
+    #[inline(always)]
+    pub fn hl(&self) -> u16 {
+        make_u16(self.l, self.h)
+    }
+
+    #[inline(always)]
+    pub fn set_hl(&mut self, x: u16) {
+        let (lo, hi) = split_u16(x);
+        self.h = hi;
+        self.l = lo;
+    }
+
+    #[inline(always)]
     pub fn push(&mut self, lo: u8, hi: u8) {
         self.mem.write(self.sp - 2, lo);
         self.mem.write(self.sp - 1, hi);
@@ -160,7 +196,7 @@ impl Cpu {
     /// by the bytes held in the H & L registers.
     #[inline(always)]
     fn read_from_hl(&self) -> u8 {
-        let addr = make_u16(self.l, self.h);
+        let addr = self.hl();
         self.mem.read(addr)
     }
 
@@ -199,7 +235,7 @@ impl Cpu {
                 10
             },
             0x02 => { // STAX B
-                let addr = make_u16(self.b, self.c);
+                let addr = self.bc();
                 self.a = self.mem.read(addr);
                 7
             },
@@ -245,7 +281,7 @@ impl Cpu {
                 10
             },
             0x0a => { // LDAX B
-                let addr = make_u16(self.c, self.b);
+                let addr = self.bc();
                 self.a = self.mem.read(addr);
                 7
             },
@@ -320,7 +356,7 @@ impl Cpu {
                 10
             },
             0x1a => { // LDAX D
-                let addr = make_u16(self.e, self.d);
+                let addr = self.de();
                 self.a = self.mem.read(addr);
                 7
             },
@@ -444,14 +480,14 @@ impl Cpu {
                 13
             },
             0x34 => { // INR M
-                let addr = make_u16(self.l, self.h);
+                let addr = self.hl();
                 let x = self.mem.read(addr).wrapping_add(1);
                 self.set_flags_zsp(x);
                 self.mem.write(addr, x);
                 10
             },
             0x35 => { // DCR M
-                let hl = make_u16(self.l, self.h);
+                let hl = self.hl();
                 let x = self.mem.read(hl).wrapping_sub(1);
                 self.set_flags_zsp(x);
                 self.mem.write(hl, x);
@@ -459,7 +495,7 @@ impl Cpu {
             },
             0x36 => { // MVI M,D8
                 let x = self.read_byte();
-                let addr = make_u16(self.l, self.h);
+                let addr = self.hl();
                 self.mem.write(addr, x);
                 10
             },
@@ -599,17 +635,17 @@ impl Cpu {
                 5
             },
             0x70 => { // MOV M,B
-                let addr = make_u16(self.l, self.h);
+                let addr = self.hl();
                 self.mem.write(addr, self.b);
                 7
             },
             0x71 => { // MOV M,C
-                let addr = make_u16(self.l, self.h);
+                let addr = self.hl();
                 self.mem.write(addr, self.c);
                 7
             },
             0x77 => { // MOV M,A
-                let addr = make_u16(self.l, self.h);
+                let addr = self.hl();
                 self.mem.write(addr, self.a);
                 7
             },
@@ -948,7 +984,7 @@ impl Cpu {
                 7
             },
             0xe9 => { // PCHL
-                self.pc = make_u16(self.l, self.h);
+                self.pc = self.hl();
                 return 5;
             },
             0xeb => { // XCHG
