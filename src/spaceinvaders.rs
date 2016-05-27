@@ -54,8 +54,8 @@ const HEIGHT: u32 = 256;
 pub struct SpaceInvadersMachine {
     cpu: Cpu,
     time: u64, // time since machine start in nanoseconds
-    shiftx: u8,
-    shifty: u8,
+    shift0: u8,
+    shift1: u8,
     shift_offset: u8,
     window: GlutinFacade,
     program: Program,
@@ -176,8 +176,8 @@ impl SpaceInvadersMachine {
         SpaceInvadersMachine {
             cpu: Cpu::new(memory),
             time: 0,
-            shiftx: 0,
-            shifty: 0,
+            shift0: 0,
+            shift1: 0,
             shift_offset: 0,
             window: window,
             program: program,
@@ -207,9 +207,11 @@ impl SpaceInvadersMachine {
         // changed since the last frame. This means we
         // only have to upload the diff instead of the
         // entire buffer every frame.
+        // let mut pixels = Vec::with_capacity(HEIGHT as usize);
         let (mut xmin, mut xmax) = (::std::u32::MAX, 0);
         let (mut ymin, mut ymax) = (::std::u32::MAX, 0);
         for y in 0..HEIGHT {
+            let mut row: Vec<(u8, u8, u8)> = Vec::with_capacity(WIDTH as usize);
             for x in 0..WIDTH {
                 let offset = (x * (HEIGHT / 8)) + y / 8;
                 let byte = self.cpu.mem.read(0x2400 + (offset as u16));
@@ -219,6 +221,7 @@ impl SpaceInvadersMachine {
                 } else {
                     (0x00, 0x00, 0x00)
                 };
+                // row.push(value);
                 if self.vbuffer[y as usize][x as usize] != value {
                     self.vbuffer[y as usize][x as usize] = value;
                     if x < xmin {
@@ -235,6 +238,7 @@ impl SpaceInvadersMachine {
                     }
                 }
             }
+            // pixels.push(row);
         }
 
         if xmin < ::std::u32::MAX && ymin < ::std::u32::MAX {
@@ -253,6 +257,7 @@ impl SpaceInvadersMachine {
                         (0x00, 0x00, 0x00)
                     };
                     row.push(value);
+                    // pixels[y as usize][x as usize] = value;
                 }
                 pixels.push(row);
             }
@@ -299,6 +304,62 @@ impl SpaceInvadersMachine {
             &uniforms,
             &Default::default()).unwrap();
         frame.finish().unwrap();
+
+
+        // if xmin < ::std::u32::MAX && ymin < ::std::u32::MAX {
+        //     thread::sleep(::std::time::Duration::new(0, 500_000_000));
+        // }
+    }
+
+    #[inline(always)]
+    fn handle_input(&mut self) -> bool {
+        for event in self.window.poll_events() {
+            match event {
+                Event::Closed => return true,
+                Event::KeyboardInput(state, _, Some(VirtualKeyCode::Escape)) => if state == Pressed {
+                    return true;
+                },
+                Event::KeyboardInput(state, _, Some(VirtualKeyCode::Left)) => { // P1 Left
+                    if state == Pressed {
+                        self.cpu.ports[1] |= 0x20;
+                    } else {
+                        self.cpu.ports[1] &= !0x20;
+                    }
+                },
+                Event::KeyboardInput(state, _, Some(VirtualKeyCode::Right)) => { // P1 Right
+                    if state == Pressed {
+                        self.cpu.ports[1] |= 0x40;
+                    } else {
+                        self.cpu.ports[1] &= !0x40;
+                    }
+                },
+                Event::KeyboardInput(state, _, Some(VirtualKeyCode::C)) => { // Coin
+                    if state == Pressed {
+                        self.cpu.ports[1] |= 0x01;
+                    } else {
+                        self.cpu.ports[1] &= !0x01;
+                    }
+                },
+                Event::KeyboardInput(state, _, Some(VirtualKeyCode::S)) => { // P1 Start
+                    if state == Pressed {
+                        self.cpu.ports[1] |= 0x04;
+                    } else {
+                        self.cpu.ports[1] &= !0x04;
+                    }
+                },
+                Event::KeyboardInput(state, _, Some(VirtualKeyCode::Space)) => { // P1 Shoot
+                    if state == Pressed {
+                        self.cpu.ports[1] |= 0x10;
+                    } else {
+                        self.cpu.ports[1] &= !0x10;
+                    }
+                },
+                // Event::KeyboardInput(state, _, Some(VirtualKeyCode::Up)) => input.up = state == Pressed,
+                // Event::KeyboardInput(state, _, Some(VirtualKeyCode::Down)) => input.down = state == Pressed,
+                _ => {}
+            }
+        }
+        false
     }
 
     pub fn run(&mut self) {
@@ -349,44 +410,8 @@ impl SpaceInvadersMachine {
             // to reduce processing time of polling for events.
             if current_real_time - last_input_real_time >= sixtieth_of_second_ns {
                 last_input_real_time = current_real_time;
-                for event in self.window.poll_events() {
-                    match event {
-                        Event::Closed => break 'main,
-                        Event::KeyboardInput(state, _, Some(VirtualKeyCode::Escape)) => if state == Pressed {
-                            break 'main;
-                        },
-                        Event::KeyboardInput(state, _, Some(VirtualKeyCode::Right)) => {
-                            if state == Pressed {
-                                self.cpu.ports[1] |= 0x20;
-                            } else {
-                                self.cpu.ports[1] &= !0x20;
-                            }
-                        },
-                        Event::KeyboardInput(state, _, Some(VirtualKeyCode::Left)) => {
-                            if state == Pressed {
-                                self.cpu.ports[1] |= 0x40;
-                            } else {
-                                self.cpu.ports[1] &= !0x40;
-                            }
-                        },
-                        Event::KeyboardInput(state, _, Some(VirtualKeyCode::C)) => {
-                            if state == Pressed {
-                                self.cpu.ports[1] |= 0x01;
-                            } else {
-                                self.cpu.ports[1] &= !0x01;
-                            }
-                        },
-                        Event::KeyboardInput(state, _, Some(VirtualKeyCode::Space)) => { // P1 Start
-                            if state == Pressed {
-                                self.cpu.ports[1] |= 0x04;
-                            } else {
-                                self.cpu.ports[1] &= !0x04;
-                            }
-                        },
-                        // Event::KeyboardInput(state, _, Some(VirtualKeyCode::Up)) => input.up = state == Pressed,
-                        // Event::KeyboardInput(state, _, Some(VirtualKeyCode::Down)) => input.down = state == Pressed,
-                        _ => {}
-                    }
+                if self.handle_input() {
+                    break 'main;
                 }
             }
         }
@@ -401,6 +426,7 @@ impl Machine for SpaceInvadersMachine {
     #[inline(always)]
     fn step(&mut self) -> u32 {
         let op = self.cpu.mem.read(self.cpu.pc);
+        // println!("{:>0pad$x}", self.cpu.pc, pad=4);
         match op {
             0xd3 => { // OUT D8
                 let port = self.cpu.mem.read(self.cpu.pc + 1);
@@ -409,8 +435,8 @@ impl Machine for SpaceInvadersMachine {
                 match port {
                     2 => self.shift_offset = value & 0x7,
                     4 => {
-                        self.shifty = self.shiftx;
-                        self.shiftx = value;
+                        self.shift0 = self.shift1;
+                        self.shift1 = value;
                     },
                     _ => {}
                 }
@@ -423,7 +449,7 @@ impl Machine for SpaceInvadersMachine {
                     0 => 1,
                     1 => self.cpu.ports[1],
                     3 => {
-                        let value = (self.shifty as u16) << 8 | self.shiftx as u16;
+                        let value = (self.shift1 as u16) << 8 | self.shift0 as u16;
                         ((value >> (8 - self.shift_offset)) & 0xff) as u8
                     },
                     _ => self.cpu.ports[port as usize],

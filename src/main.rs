@@ -112,6 +112,7 @@ fn main() {
         Options::Cpm { filename } => {
             let buf = read_file(&filename);
             let mut machine = cpm::Cpm::new(&buf);
+            machine.cpu.pc = 0x100;
             machine.run();
         },
         Options::Disassemble { filename, offset } => {

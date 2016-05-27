@@ -1,11 +1,11 @@
 
-use cpu::Cpu;
+use cpu::{Cpu, make_u16};
 use machine::Machine;
 use memory::Memory;
 
 /// Emulation of the CP/M system.
 pub struct Cpm {
-    cpu: Cpu,
+    pub cpu: Cpu,
 }
 
 impl Cpm {
@@ -20,7 +20,7 @@ impl Cpm {
 
     pub fn run(&mut self) {
         loop {
-            self.cpu.step();
+            self.step();
         }
     }
 }
@@ -29,7 +29,36 @@ impl Machine for Cpm {
     /// Step the Machine by a single instruction.
     #[inline(always)]
     fn step(&mut self) -> u32 {
-        self.cpu.step()
+        let op = self.cpu.mem.read(self.cpu.pc);
+        // println!("pc: {:>0pad$x} op: {:>0padop$x} cc.p: {}", self.cpu.pc, op, self.cpu.cc.p, pad=4, padop=2);
+        let cycles = match op {
+            0xcd => {
+                let addr = self.cpu.read_u16();
+                match addr {
+                    5 => {
+                        if self.cpu.c == 9 {
+                            let offset = make_u16(self.cpu.e, self.cpu.d) + 3;
+                            let mut c = String::from_utf8(vec![self.cpu.mem.read(offset)]).expect("Not a UTF-8 String");
+                            loop {
+                                match c.as_ref() {
+                                    "$" => break,
+                                    c => print!("{}", c),
+                                }
+                            }
+                            print!("\n");
+                        }
+                        17
+                    },
+                    0 => {
+                        ::std::process::exit(0);
+                        17
+                    },
+                    _ => self.cpu.step()
+                }
+            },
+            _ => self.cpu.step()
+        };
+        cycles
     }
 
     #[inline(always)]
