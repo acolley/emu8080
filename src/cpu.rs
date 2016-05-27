@@ -157,6 +157,86 @@ impl Cpu {
         (lo, hi)
     }
 
+    #[inline(always)]
+    fn inr(&mut self, x: u8) -> u8 {
+        let x = x.wrapping_add(1);
+        self.set_flags_zsp(x);
+        self.cc.ac = if x & 0x0f == 0 { 1 } else { 0 };
+        x
+    }
+
+    /// Decrement the given value setting
+    /// the appropriate flags and returning
+    /// the resultant value.
+    #[inline(always)]
+    fn dcr(&mut self, x: u8) -> u8 {
+        let x = x.wrapping_sub(1);
+        self.set_flags_zsp(x);
+        self.cc.ac = if x & 0x0f == 0 { 1 } else { 0 };
+        x
+    }
+
+    #[inline(always)]
+    fn stax(&mut self, addr: u16) {
+        let x = self.a;
+        self.mem.write(addr, x);
+    }
+
+    #[inline(always)]
+    fn add(&mut self, x: u8) {
+        let a = self.a as u16 + x as u16;
+        self.set_flags_arith(a);
+        self.a = a as u8;
+    }
+
+    #[inline(always)]
+    fn adc(&mut self, x: u8) {
+        let a = self.a as u16 + x as u16 + self.cc.cy as u16;
+        self.set_flags_arith(a);
+        self.a = a as u8;
+    }
+
+    #[inline(always)]
+    fn sub(&mut self, x: u8) {
+        let a = self.a as u16 - x as u16;
+        self.set_flags_arith(a);
+        self.a = a as u8;
+    }
+
+    #[inline(always)]
+    fn sbb(&mut self, x: u8) {
+        let a = self.a as u16 - x as u16 - self.cc.cy as u16;
+        self.set_flags_arith(a);
+        self.a = a as u8;
+    }
+
+    #[inline(always)]
+    fn ana(&mut self, x: u8) {
+        let a = self.a & x;
+        self.set_flags_logic(a);
+        self.a = a;
+    }
+
+    #[inline(always)]
+    fn xra(&mut self, x: u8) {
+        let a = self.a ^ x;
+        self.set_flags_logic(a);
+        self.a = a;
+    }
+
+    #[inline(always)]
+    fn ora(&mut self, x: u8) {
+        let a = self.a | x;
+        self.set_flags_logic(a);
+        self.a = a;
+    }
+
+    #[inline(always)]
+    fn cmp(&mut self, x: u8) {
+        let a = self.a as u16 - x as u16;
+        self.set_flags_arith(a);
+    }
+
     /// CALL instruction
     #[inline(always)]
     fn call(&mut self) {
@@ -218,13 +298,16 @@ impl Cpu {
     fn set_flags_arith(&mut self, x: u16) {
         self.set_flags_zsp(x as u8);
         self.cc.cy = if x > 0xff { 1 } else { 0 };
+        // TODO: calculate Auxiliary Carry/Half Carry
+        // https://en.wikipedia.org/wiki/Half-carry_flag
+        // self.cc.ac = 
+        self.cc.ac = 0;
     }
 
     #[inline(always)]
     fn set_flags_logic(&mut self, x: u8) {
         self.set_flags_zsp(x);
         self.cc.cy = 0;
-        self.cc.ac = 0;
     }
 
     /// Read a byte from memory at the address pointed to
@@ -243,7 +326,7 @@ impl Cpu {
             },
             0x02 => { // STAX B
                 let addr = self.bc();
-                self.a = self.mem.read(addr);
+                self.stax(addr);
                 7
             },
             0x03 => { // INX B
@@ -330,6 +413,11 @@ impl Cpu {
                 self.e = e;
                 10
             },
+            0x12 => { // STAX D
+                let addr = self.de();
+                self.stax(addr);
+                7
+            },
             0x13 => { // INX D
                 self.e = self.e.wrapping_add(1);
                 if self.e == 0 {
@@ -380,6 +468,16 @@ impl Cpu {
                 self.e = e;
                 5
             },
+            0x1d => { // DCR E
+                let e = self.e.wrapping_sub(1);
+                self.set_flags_zsp(e);
+                self.e = e;
+                5
+            },
+            0x1e => { // MVI E,D8
+                self.e = self.read_byte();
+                7
+            },
             0x1f => { // RAR
                 // Rotates the carry bit right
                 // and combines it with the value
@@ -416,6 +514,12 @@ impl Cpu {
                 self.h = h;
                 5
             },
+            0x25 => { // DCR H
+                let h = self.h.wrapping_sub(1);
+                self.set_flags_zsp(h);
+                self.h = h;
+                5
+            },
             0x26 => { // MVI H,D8
                 self.h = self.read_byte();
                 7
@@ -431,14 +535,21 @@ impl Cpu {
                 // 2. If the value of the most significant 4 bits of the 
                 // accumulator is now greater than 9, or if the CY flag is set, 
                 // 6 is added to the most significant 4 bits of the accumulator.
-                if self.a & 0xf > 9 {
-                    self.a += 6;
+                let mut a = self.a as u16;
+                if a & 0x0f > 9 || self.cc.ac == 1 {
+                    a += 6;
+                    self.cc.ac = 1;
+                } else {
+                    self.cc.ac = 0;
                 }
-                if self.a & 0xf0 > 0x90 {
-                    let res = (self.a as u16) + 0x60;
-                    self.a = res as u8;
-                    self.set_flags_arith(res);
+                if a & 0xf0 > 0x90 || self.cc.cy == 1 {
+                    a += 0x60;
+                    self.cc.cy = 1;
+                } else {
+                    self.cc.cy = 0;
                 }
+                self.set_flags_zsp(a as u8);
+                self.a = a as u8;
                 4
             },
             0x29 => { // DAD H
@@ -465,6 +576,12 @@ impl Cpu {
             },
             0x2c => { // INR L
                 let l = self.l.wrapping_add(1);
+                self.set_flags_zsp(l);
+                self.l = l;
+                5
+            },
+            0x2d => { // DCR L
+                let l = self.l.wrapping_sub(1);
                 self.set_flags_zsp(l);
                 self.l = l;
                 5
@@ -538,6 +655,10 @@ impl Cpu {
                 self.a = self.read_byte();
                 7
             },
+            0x3f => { // CMC
+                self.cc.cy = !self.cc.cy;
+                4
+            },
             0x41 => {  // MOV B,C
                 self.b = self.c;
                 5
@@ -548,6 +669,10 @@ impl Cpu {
             },
             0x43 => { // MOV B,E
                 self.b = self.e;
+                5
+            },
+            0x44 => { // MOV B,H
+                self.b = self.h;
                 5
             },
             0x45 => { // MOV B,L
@@ -573,12 +698,16 @@ impl Cpu {
                 self.c = self.d;
                 5
             },
-            0x4d => { // MOV C,L
-                self.c = self.l;
+            0x4b => { // MOV C,E
+                self.c = self.e;
                 5
             },
             0x4c => { // MOV C,H
                 self.c = self.h;
+                5
+            },
+            0x4d => { // MOV C,L
+                self.c = self.l;
                 5
             },
             0x4e => { // MOV C,M
@@ -589,8 +718,27 @@ impl Cpu {
                 self.c = self.a;
                 5
             },
+            0x50 => { // MOV D,B
+                self.d = self.b;
+                5
+            },
             0x51 => { // MOV D,C
                 self.d = self.c;
+                5
+            },
+            0x52 => { // MOV D,D
+                5
+            },
+            0x53 => { // MOV D,E
+                self.d = self.e;
+                5
+            },
+            0x54 => { // MOV D,H
+                self.d = self.h;
+                5
+            },
+            0x55 => { // MOV D,L
+                self.d = self.l;
                 5
             },
             0x56 => { // MOV D,M
@@ -599,6 +747,29 @@ impl Cpu {
             },
             0x57 => { // MOV D,A
                 self.d = self.a;
+                5
+            },
+            0x58 => { // MOV E,B
+                self.e = self.b;
+                5
+            },
+            0x59 => { // MOV E,C
+                self.e = self.c;
+                5
+            },
+            0x5a => { // MOV E,D
+                self.e = self.d;
+                5
+            },
+            0x5b => { // MOV E,E
+                5
+            },
+            0x5c => { // MOV E,H
+                self.e = self.h;
+                5
+            },
+            0x5d => { // MOV E,L
+                self.e = self.l;
                 5
             },
             0x5e => { // MOV E,M
@@ -615,6 +786,17 @@ impl Cpu {
             },
             0x61 => { // MOV H,C
                 self.h = self.c;
+                5
+            },
+            0x62 => { // MOV H,D
+                self.h = self.d;
+                5
+            },
+            0x63 => { // MOV H,E
+                self.h = self.e;
+                5
+            },
+            0x64 => { // MOV H,H
                 5
             },
             0x65 => { // MOV H,L
@@ -637,6 +819,25 @@ impl Cpu {
                 self.l = self.c;
                 5
             },
+            0x6a => { // MOV L,D
+                self.l = self.d;
+                5
+            },
+            0x6b => { // MOV L,E
+                self.l = self.e;
+                5
+            },
+            0x6c => { // MOV L,H
+                self.l = self.h;
+                5
+            },
+            0x6d => { // MOV L,L
+                5
+            },
+            0x6e => { // MOV L,M
+                self.l = self.read_from_hl();
+                7
+            },
             0x6f => { // MOV L,A
                 self.l = self.a;
                 5
@@ -651,6 +852,29 @@ impl Cpu {
                 self.mem.write(addr, self.c);
                 7
             },
+            0x72 => { // MOV M,D
+                let addr = self.hl();
+                self.mem.write(addr, self.d);
+                7
+            },
+            0x73 => { // MOV M,E
+                let addr = self.hl();
+                self.mem.write(addr, self.e);
+                7
+            },
+            0x74 => { // MOV M,H
+                let addr = self.hl();
+                self.mem.write(addr, self.h);
+                7
+            },
+            0x75 => { // MOV M,L
+                let addr = self.hl();
+                self.mem.write(addr, self.l);
+                7
+            },
+            // 0x76 => { // HLT
+
+            // },
             0x77 => { // MOV M,A
                 let addr = self.hl();
                 self.mem.write(addr, self.a);
@@ -688,118 +912,325 @@ impl Cpu {
                 5
             },
             0x80 => { // ADD B
-                let x = self.a as u16 + self.b as u16;
-                self.set_flags_arith(x);
-                self.a = x as u8;
+                let x = self.b;
+                self.add(x);
                 4
             },
             0x81 => { // ADD C
-                let x = self.a as u16 + self.c as u16;
-                self.set_flags_arith(x);
-                self.a = x as u8;
+                let x = self.c;
+                self.add(x);
                 4
             }
             0x82 => { // ADD D
-                let x = self.a as u16 + self.d as u16;
-                self.set_flags_arith(x);
-                self.a = x as u8;
+                let x = self.d;
+                self.add(x);
+                4
+            },
+            0x83 => { // ADD E
+                let x = self.e;
+                self.add(x);
+                4
+            },
+            0x84 => { // ADD H
+                let x = self.h;
+                self.add(x);
                 4
             },
             0x85 => { // ADD L
-                let x = self.a as u16 + self.l as u16;
-                self.set_flags_arith(x);
-                self.a = x as u8;
+                let x = self.l;
+                self.add(x);
                 4
             },
             0x86 => { // ADD M
-                let a = self.a as u16 + self.read_from_hl() as u16;
-                self.set_flags_arith(a);
-                self.a = a as u8;
+                let x = self.read_from_hl();
+                self.add(x);
                 7
             },
             0x87 => { // ADD A
-                let x = self.a as u16 + self.a as u16;
-                self.set_flags_arith(x);
-                self.a = x as u8;
+                let x = self.a;
+                self.add(x);
                 4
+            },
+            0x88 => { // ADC B
+                let x = self.b;
+                self.adc(x);
+                4
+            },
+            0x89 => { // ADC C
+                let x = self.c;
+                self.adc(x);
+                4
+            },
+            0x8a => { // ADC D
+                let x = self.d;
+                self.adc(x);
+                4
+            },
+            0x8b => { // ADC E
+                let x = self.e;
+                self.adc(x);
+                4
+            },
+            0x8c => { // ADC H
+                let x = self.h;
+                self.adc(x);
+                4
+            },
+            0x8d => { // ADC L
+                let x = self.l;
+                self.adc(x);
+                4
+            },
+            0x8e => { // ADC M
+                let x = self.read_from_hl();
+                self.adc(x);
+                7
+            },
+            0x8f => { // ADC A
+                let x = self.a;
+                self.adc(x);
+                4
+            },
+            0x90 => { // SUB B
+                let x = self.b;
+                self.sub(x);
+                4
+            },
+            0x91 => { // SUB C
+                let x = self.c;
+                self.sub(x);
+                4
+            },
+            0x92 => { // SUB D
+                let x = self.d;
+                self.sub(x);
+                4
+            },
+            0x93 => { // SUB E
+                let x = self.e;
+                self.sub(x);
+                4
+            },
+            0x94 => { // SUB H
+                let x = self.h;
+                self.sub(x);
+                4
+            },
+            0x95 => { // SUB L
+                let x = self.l;
+                self.sub(x);
+                4
+            },
+            0x96 => { // SUB M
+                let x = self.read_from_hl();
+                self.sub(x);
+                7
             },
             0x97 => { // SUB A
                 // TODO: could just set to 0
-                let x = self.a as u16 - self.a as u16;
-                self.set_flags_arith(x);
-                self.a = x as u8;
+                let x = self.a;
+                self.sub(x);
+                4
+            },
+            0x98 => { // SBB B
+                let x = self.b;
+                self.sbb(x);
+                4
+            },
+            0x99 => { // SBB C
+                let x = self.c;
+                self.sbb(x);
+                4
+            },
+            0x9a => { // SBB D
+                let x = self.d;
+                self.sbb(x);
+                4
+            },
+            0x9b => { // SBB E
+                let x = self.e;
+                self.sbb(x);
+                4
+            },
+            0x9c => { // SBB H
+                let x = self.h;
+                self.sbb(x);
+                4
+            },
+            0x9d => { // SBB L
+                let x = self.l;
+                self.sbb(x);
+                4
+            },
+            0x9e => { // SBB M
+                let x = self.read_from_hl();
+                self.sbb(x);
+                7
+            },
+            0x9f => { // SBB A
+                let x = self.a;
+                self.sbb(x);
                 4
             },
             0xa0 => { // ANA B
-                let a = self.a & self.b;
-                self.set_flags_logic(a);
-                self.a = a;
+                let x = self.b;
+                self.ana(x);
+                4
+            },
+            0xa1 => { // ANA C
+                let x = self.c;
+                self.ana(x);
+                4
+            },
+            0xa2 => { // ANA D
+                let x = self.d;
+                self.ana(x);
+                4
+            },
+            0xa3 => { // ANA E
+                let x = self.e;
+                self.ana(x);
+                4
+            },
+            0xa4 => { // ANA H
+                let x = self.h;
+                self.ana(x);
+                4
+            },
+            0xa5 => { // ANA L
+                let x = self.l;
+                self.ana(x);
                 4
             },
             0xa6 => { // ANA M
-                let a = self.a & self.read_from_hl();
-                self.set_flags_logic(a);
-                self.a = a;
+                let x = self.read_from_hl();
+                self.ana(x);
                 7
             },
             0xa7 => { // ANA A
-                let a = self.a & self.a;
-                self.set_flags_logic(a);
-                self.a = a;
+                let x = self.a;
+                self.ana(x);
                 4
             },
             0xa8 => { // XRA B
-                let a = self.a ^ self.b;
-                self.set_flags_logic(a);
-                self.a = a;
+                let x = self.b;
+                self.xra(x);
                 4
             },
+            0xa9 => { // XRA C
+                let x = self.c;
+                self.xra(x);
+                4
+            },
+            0xaa => { // XRA D
+                let x = self.d;
+                self.xra(x);
+                4
+            },
+            0xab => { // XRA E
+                let x = self.e;
+                self.xra(x);
+                4
+            },
+            0xac => { // XRA H
+                let x = self.h;
+                self.xra(x);
+                4
+            },
+            0xad => { // XRA L
+                let x = self.l;
+                self.xra(x);
+                4
+            },
+            0xae => { // XRA M
+                let x = self.read_from_hl();
+                self.xra(x);
+                7
+            },
             0xaf => { // XRA A
-                let a = self.a ^ self.a;
-                self.set_flags_logic(a);
-                self.a = a;
+                let x = self.a;
+                self.xra(x);
                 4
             },
             0xb0 => { // ORA B
-                let a = self.a | self.b;
-                self.set_flags_logic(a);
-                self.a = a;
+                let x = self.b;
+                self.ora(x);
+                4
+            },
+            0xb1 => { // ORA C
+                let x = self.c;
+                self.ora(x);
+                4
+            },
+            0xb2 => { // ORA D
+                let x = self.d;
+                self.ora(x);
                 4
             },
             0xb3 => { // ORA E
-                let a = self.a | self.e;
-                self.set_flags_logic(a);
-                self.a = a;
+                let x = self.e;
+                self.ora(x);
                 4
             },
             0xb4 => { // ORA H
-                let a = self.a | self.h;
-                self.set_flags_logic(a);
-                self.a = a;
+                let x = self.h;
+                self.ora(x);
+                4
+            },
+            0xb5 => { // ORA L
+                let x = self.l;
+                self.ora(x);
                 4
             },
             0xb6 => { // ORA M
                 let x = self.read_from_hl();
-                let a = self.a | x;
-                self.set_flags_logic(a);
-                self.a = a;
+                self.ora(x);
                 7
             },
+            0xb7 => { // ORA A
+                let x = self.a;
+                self.ora(x);
+                4
+            },
             0xb8 => { // CMP B
-                let x = self.a as u16 - self.b as u16;
-                self.set_flags_arith(x);
+                let x = self.b;
+                self.cmp(x);
+                4
+            },
+            0xb9 => { // CMP C
+                let x = self.c;
+                self.cmp(x);
+                4
+            },
+            0xba => { // CMP D
+                let x = self.d;
+                self.cmp(x);
+                4
+            },
+            0xbb => { // CMP E
+                let x = self.e;
+                self.cmp(x);
                 4
             },
             0xbc => { // CMP H
-                let x = self.a as u16 - self.h as u16;
-                self.set_flags_arith(x);
+                let x = self.h;
+                self.cmp(x);
+                4
+            },
+            0xbd => { // CMP L
+                let x = self.l;
+                self.cmp(x);
                 4
             },
             0xbe => { // CMP M
                 let x = self.read_from_hl();
-                let res = self.a as u16 - x as u16;
-                self.set_flags_arith(res);
+                self.cmp(x);
                 7
+            },
+            0xbf => { // CMP A
+                let x = self.a;
+                self.cmp(x);
+                4
             },
             0xc0 => { // RNZ
                 if self.cc.z == 0 {
@@ -885,6 +1316,15 @@ impl Cpu {
                 self.call();
                 return 17;
             },
+            0xce => { // ACI D8
+                let x = self.read_byte();
+                let a = (self.a as u16)
+                    .wrapping_add(x as u16)
+                    .wrapping_add(self.cc.cy as u16);
+                self.set_flags_arith(a);
+                self.a = a as u8;
+                7
+            },
             0xd0 => { // RNC
                 if self.cc.cy == 0 {
                     self.ret();
@@ -956,12 +1396,29 @@ impl Cpu {
                 self.a = self.ports[port as usize];
                 10
             },
+            0xdc => { // CC addr
+                if self.cc.cy == 1 {
+                    self.call();
+                    return 17;
+                } else {
+                    self.pc += 2;
+                }
+                11
+            },
             0xde => { // SBI D8
                 let x = self.read_byte();
                 let a = self.a as u16 - x as u16 - self.cc.cy as u16;
                 self.set_flags_arith(a);
                 self.a = a as u8;
                 7
+            },
+            0xe0 => { // RPO
+                if self.cc.p == 0 {
+                    self.ret();
+                    return 11;
+                } else {
+                    5
+                }
             },
             0xe1 => { // POP H
                 let (lo, hi) = self.pop();
@@ -987,6 +1444,15 @@ impl Cpu {
                 self.mem.write(self.sp + 1, h);
                 18
             },
+            0xe4 => { // CPO addr
+                if self.cc.p == 0 {
+                    self.call();
+                    return 17;
+                } else {
+                    self.pc += 2;
+                }
+                11
+            },
             0xe5 => { // PUSH H
                 let (lo, hi) = (self.l, self.h);
                 self.push(lo, hi);
@@ -998,6 +1464,14 @@ impl Cpu {
                 self.set_flags_logic(a);
                 self.a = a;
                 7
+            },
+            0xe8 => { // RPE
+                if self.cc.p == 1 {
+                    self.ret();
+                    return 11;
+                } else {
+                    5
+                }
             },
             0xe9 => { // PCHL
                 self.pc = self.hl();
@@ -1017,6 +1491,22 @@ impl Cpu {
                 mem::swap(&mut self.d, &mut self.h);
                 4
             },
+            0xec => { // CPE addr
+                if self.cc.p == 1 {
+                    self.call();
+                    return 17;
+                } else {
+                    self.pc += 2;
+                }
+                11
+            },
+            0xee => { // XRI D8
+                let x = self.read_byte();
+                let a = self.a ^ x;
+                self.set_flags_logic(a);
+                self.a = a;
+                7
+            },
             0xf1 => { // POP PSW
                 let x = self.mem.read(self.sp);
                 self.cc.cy = x & 0b00000001;
@@ -1028,6 +1518,14 @@ impl Cpu {
                 self.sp += 2;
                 10
             },
+            0xf0 => { // RP
+                if self.cc.s == 0 {
+                    self.ret();
+                    return 11;
+                } else {
+                    5
+                }
+            },
             0xf2 => { // JP addr
                 if self.cc.s == 0 {
                     self.pc = self.read_u16();
@@ -1036,6 +1534,15 @@ impl Cpu {
                     self.pc += 2;
                 }
                 10
+            },
+            0xf4 => { // CP addr
+                if self.cc.s == 0 {
+                    self.call();
+                    return 17;
+                } else {
+                    self.pc += 2;
+                }
+                11
             },
             0xf5 => { // PUSH PSW
                 self.mem.write(self.sp - 1, self.a);
@@ -1055,6 +1562,14 @@ impl Cpu {
                 self.a = a;
                 7
             },
+            0xf8 => { // RM
+                if self.cc.s == 1 {
+                    self.ret();
+                    return 11;
+                } else {
+                    5
+                }
+            },
             0xfa => { // JM addr
                 if self.cc.s == 1 {
                     self.pc = self.read_u16();
@@ -1068,11 +1583,18 @@ impl Cpu {
                 self.interrupt_enabled = true;
                 4
             },
+            0xfc => { // CM addr
+                if self.cc.s == 1{
+                    self.call();
+                    return 17;
+                } else {
+                    self.pc += 2;
+                }
+                11
+            },
             0xfe => { // CPI D8
                 let x = self.read_byte();
-                let y = self.a.wrapping_sub(x);
-                self.set_flags_zsp(y);
-                self.cc.cy = if self.a < x { 1 } else { 0 };
+                self.cmp(x);
                 7
             },
             x => panic!("Unimplemented OpCode: {:>0pad$x}", x, pad=2)

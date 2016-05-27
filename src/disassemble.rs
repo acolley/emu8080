@@ -173,6 +173,11 @@ pub fn disassemble(bytes: &[u8], offset: usize) {
             0x1b => println!("DCX D"),
             0x1c => println!("INR E"),
             0x1d => println!("DCR E"),
+            0x1e => {
+                let x = iter.next().unwrap();
+                println!("MVI E,#{:>0pad$x}", x, pad=2);
+                pc += 1;
+            },
             0x1f => println!("RAR"),
             0x20 => println!("RIM"),
             0x21 => {
@@ -205,6 +210,7 @@ pub fn disassemble(bytes: &[u8], offset: usize) {
             },
             0x2b => println!("DCX H"),
             0x2c => println!("INR L"),
+            0x2d => println!("DCR L"),
             0x2e => {
                 let x = iter.next().unwrap();
                 println!("MVI L,#{:>0pad$x}", x, pad=2);
@@ -224,6 +230,7 @@ pub fn disassemble(bytes: &[u8], offset: usize) {
                 println!("STA ${:>0pad$x}{:>0pad$x}", hi, lo, pad=2);
                 pc += 2;
             },
+            0x33 => println!("INX SP"),
             0x34 => println!("INR M"),
             0x35 => println!("DCR M"),
             0x36 => {
@@ -238,6 +245,7 @@ pub fn disassemble(bytes: &[u8], offset: usize) {
                 println!("LDA ${:>0pad$x}{:>0pad$x}", hi, lo, pad=2);
                 pc += 2;
             },
+            0x3b => println!("DCX SP"),
             0x3c => println!("INR A"),
             0x3d => println!("DCR A"),
             0x3e =>  {
@@ -254,7 +262,11 @@ pub fn disassemble(bytes: &[u8], offset: usize) {
             0x45 => println!("MOV B,L"),
             0x46 => println!("MOV B,M"),
             0x47 => println!("MOV B,A"),
+            0x48 => println!("MOV C,B"),
             0x49 => println!("MOV C,C"),
+            0x4a => println!("MOV C,D"),
+            0x4b => println!("MOV C,E"),
+            0x4c => println!("MOV C,H"),
             0x4d => println!("MOV C,L"),
             0x4e => println!("MOV C,M"),
             0x4f => println!("MOV C,A"),
@@ -274,16 +286,29 @@ pub fn disassemble(bytes: &[u8], offset: usize) {
             0x5d => println!("MOV E,L"),
             0x5e => println!("MOV E,M"),
             0x5f => println!("MOV E,A"),
+            0x60 => println!("MOV H,B"),
             0x61 => println!("MOV H,C"),
+            0x62 => println!("MOV H,D"),
+            0x63 => println!("MOV H,E"),
+            0x64 => println!("MOV H,H"),
+            0x65 => println!("MOV H,L"),
             0x66 => println!("MOV H,M"),
             0x67 => println!("MOV H,A"),
             0x68 => println!("MOV L,B"),
             0x69 => println!("MOV L,C"),
+            0x6a => println!("MOV L,D"),
+            0x6b => println!("MOV L,E"),
+            0x6c => println!("MOV L,H"),
+            0x6d => println!("MOV L,L"),
+            0x6e => println!("MOV L,M"),
             0x6f => println!("MOV L,A"),
             0x70 => println!("MOV M,B"),
             0x71 => println!("MOV M,C"),
             0x72 => println!("MOV M,D"),
             0x73 => println!("MOV M,E"),
+            0x74 => println!("MOV M,H"),
+            0x75 => println!("MOV M,L"),
+            0x76 => println!("HLT"),
             0x77 => println!("MOV M,A"),
             0x78 => println!("MOV A,B"),
             0x79 => println!("MOV A,C"),
@@ -295,20 +320,68 @@ pub fn disassemble(bytes: &[u8], offset: usize) {
             0x7f => println!("MOV A,A"),
             0x80 => println!("ADD B"),
             0x81 => println!("ADD C"),
+            0x82 => println!("ADD D"),
+            0x83 => println!("ADD E"),
+            0x84 => println!("ADD H"),
             0x85 => println!("ADD L"),
             0x86 => println!("ADD M"),
+            0x87 => println!("ADD A"),
+            0x88 => println!("ADC B"),
+            0x89 => println!("ADC C"),
+            0x8a => println!("ADC D"),
+            0x8b => println!("ADC E"),
+            0x8c => println!("ADC H"),
+            0x8d => println!("ADC L"),
+            0x8e => println!("ADC M"),
+            0x8f => println!("ADC A"),
+            0x90 => println!("SUB B"),
+            0x91 => println!("SUB C"),
+            0x92 => println!("SUB D"),
+            0x93 => println!("SUB E"),
+            0x94 => println!("SUB H"),
+            0x95 => println!("SUB L"),
+            0x96 => println!("SUB M"),
             0x97 => println!("SUB A"),
+            0x98 => println!("SBB B"),
+            0x99 => println!("SBB C"),
+            0x9a => println!("SBB D"),
+            0x9b => println!("SBB E"),
+            0x9c => println!("SBB H"),
+            0x9d => println!("SBB L"),
+            0x9e => println!("SBB M"),
+            0x9f => println!("SBB A"),
             0xa0 => println!("ANA B"),
+            0xa1 => println!("ANA C"),
+            0xa2 => println!("ANA D"),
+            0xa3 => println!("ANA E"),
+            0xa4 => println!("ANA H"),
+            0xa5 => println!("ANA L"),
             0xa6 => println!("ANA M"),
             0xa7 => println!("ANA A"),
             0xa8 => println!("XRA B"),
+            0xa9 => println!("XRA C"),
+            0xaa => println!("XRA D"),
+            0xab => println!("XRA E"),
+            0xac => println!("XRA H"),
+            0xad => println!("XRA L"),
+            0xae => println!("XRA M"),
             0xaf => println!("XRA A"),
             0xb0 => println!("ORA B"),
+            0xb1 => println!("ORA C"),
+            0xb2 => println!("ORA D"),
+            0xb3 => println!("ORA E"),
             0xb4 => println!("ORA H"),
+            0xb5 => println!("ORA L"),
             0xb6 => println!("ORA M"),
+            0xb7 => println!("ORA A"),
             0xb8 => println!("CMP B"),
+            0xb9 => println!("CMP C"),
+            0xba => println!("CMP D"),
+            0xbb => println!("CMP E"),
             0xbc => println!("CMP H"),
+            0xbd => println!("CMP L"),
             0xbe => println!("CMP M"),
+            0xbf => println!("CMP A"),
             0xc0 => println!("RNZ"),
             0xc1 => println!("POP B"),
             0xc2 => {
@@ -355,6 +428,11 @@ pub fn disassemble(bytes: &[u8], offset: usize) {
                 println!("CALL ${:>0pad$x}{:>0pad$x}", hi, lo, pad=2);
                 pc += 2;
             },
+            0xce => {
+                let x = iter.next().unwrap();
+                println!("ACI #{:>0pad$x}", x, pad=2);
+                pc += 1;
+            },
             0xd0 => println!("RNC"),
             0xd1 => println!("POP D"),
             0xd2 => {
@@ -391,11 +469,18 @@ pub fn disassemble(bytes: &[u8], offset: usize) {
                 println!("IN #{:>0pad$x}", x, pad=2);
                 pc += 1;
             },
+            0xdc => {
+                let lo = iter.next().unwrap();
+                let hi = iter.next().unwrap();
+                println!("CC ${:>0pad$x}{:>0pad$x}", hi, lo, pad=2);
+                pc += 2;
+            },
             0xde => {
                 let x = iter.next().unwrap();
                 println!("SBI #{:>0pad$x}", x, pad=2);
                 pc += 1;
             },
+            0xe0 => println!("RPO"),
             0xe1 => println!("POP H"),
             0xe2 => {
                 let lo = iter.next().unwrap();
@@ -404,12 +489,19 @@ pub fn disassemble(bytes: &[u8], offset: usize) {
                 pc += 2;
             },
             0xe3 => println!("XTHL"),
+            0xe4 => {
+                let lo = iter.next().unwrap();
+                let hi = iter.next().unwrap();
+                println!("CPO ${:>0pad$x}{:>0pad$x}", hi, lo, pad=2);
+                pc += 2;
+            },
             0xe5 => println!("PUSH H"),
             0xe6 => {
                 let x = iter.next().unwrap();
                 println!("ANI #{:>0pad$x}", x, pad=2);
                 pc += 1;
             },
+            0xe8 => println!("RPE"),
             0xe9 => println!("PCHL"),
             0xea => {
                 let lo = iter.next().unwrap();
@@ -418,11 +510,29 @@ pub fn disassemble(bytes: &[u8], offset: usize) {
                 pc += 2;
             },
             0xeb => println!("XCHG"),
+            0xec => {
+                let lo = iter.next().unwrap();
+                let hi = iter.next().unwrap();
+                println!("CPE ${:>0pad$x}{:>0pad$x}", hi, lo, pad=2);
+                pc += 2;
+            },
+            0xee => {
+                let x = iter.next().unwrap();
+                println!("XRI #{:>0pad$x}", x, pad=2);
+                pc += 1;
+            },
+            0xf0 => println!("RP"),
             0xf1 => println!("POP PSW"),
             0xf2 => {
                 let lo = iter.next().unwrap();
                 let hi = iter.next().unwrap();
                 println!("JP ${:>0pad$x}{:>0pad$x}", hi, lo, pad=2);
+                pc += 2;
+            },
+            0xf4 => {
+                let lo = iter.next().unwrap();
+                let hi = iter.next().unwrap();
+                println!("CP ${:>0pad$x}{:>0pad$x}", hi, lo, pad=2);
                 pc += 2;
             },
             0xf5 => println!("PUSH PSW"),
@@ -432,6 +542,8 @@ pub fn disassemble(bytes: &[u8], offset: usize) {
                 pc += 1;
             },
             0xf7 => println!("RST 6"),
+            0xf8 => println!("RM"),
+            0xf9 => println!("SPHL"),
             0xfa => {
                 let lo = iter.next().unwrap();
                 let hi = iter.next().unwrap();
@@ -439,6 +551,12 @@ pub fn disassemble(bytes: &[u8], offset: usize) {
                 pc += 2;
             },
             0xfb => println!("EI"),
+            0xfc => {
+                let lo = iter.next().unwrap();
+                let hi = iter.next().unwrap();
+                println!("CM ${:>0pad$x}{:>0pad$x}", hi, lo, pad=2);
+                pc += 2;
+            },
             0xfe => {
                 let x = iter.next().unwrap();
                 println!("CPI #{:>0pad$x}", x, pad=2);
