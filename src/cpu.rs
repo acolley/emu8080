@@ -26,18 +26,25 @@ impl ConditionCodes {
     }
 }
 
-#[inline(always)]
-fn parity(x: u8, size: u8) -> u8 {
-    let mut p = 0;
-    let mut x = x & ((1u8.wrapping_shl(size as u32)) - 1);
-    for _ in 0..size {
-        if (x & 0x1) > 0 {
-            p += 1;
-        }
-        x = x.wrapping_shr(1);
-    }
+const PARITY_BYTES: [u8; 8] = [
+    0b00000001,
+    0b00000010,
+    0b00000100,
+    0b00001000,
+    0b00010000,
+    0b00100000,
+    0b01000000,
+    0b10000000
+];
 
-    if (p & 0x1) == 0 { 1 } else { 0 }
+/// If the number of 1's in a byte is
+/// even return 1, otherwise return 0.
+#[inline(always)]
+fn parity(x: u8) -> u8 {
+    let p = PARITY_BYTES.iter()
+        .enumerate()
+        .fold(0, |acc, ib| acc + ((ib.1 & x) >> ib.0));
+    if (p % 2) == 0 { 1 } else { 0 }
 }
 
 /// Deconstruct a u16 value into its
@@ -50,7 +57,7 @@ fn split_u16(x: u16) -> (u8, u8) {
 }
 
 #[inline(always)]
-fn make_u16(lo: u8, hi: u8) -> u16 {
+pub fn make_u16(lo: u8, hi: u8) -> u16 {
     (hi as u16) << 8 | lo as u16
 }
 
@@ -185,7 +192,7 @@ impl Cpu {
     }
 
     #[inline(always)]
-    fn read_u16(&mut self) -> u16 {
+    pub fn read_u16(&mut self) -> u16 {
         let lo = self.mem.read(self.pc + 1);
         let hi = self.mem.read(self.pc + 2);
         self.pc += 2;
@@ -204,7 +211,7 @@ impl Cpu {
     fn set_flags_zsp(&mut self, x: u8) {
         self.cc.z = if x == 0 { 1 } else { 0 };
         self.cc.s = if (x & 0x80 == 0x80) { 1 } else { 0 };
-        self.cc.p = parity(x, 8);
+        self.cc.p = parity(x);
     }
 
     #[inline(always)]
@@ -264,7 +271,7 @@ impl Cpu {
             },
             0x07 => { // RLC
                 self.a = self.a.rotate_left(1);
-                // If register had a bit switched on in the LSB
+                // If register has a bit switched on in the LSB
                 // then rotating left will have caused a carry.
                 if self.a & 1 == 1 {
                     self.cc.cy = 1;
@@ -310,7 +317,7 @@ impl Cpu {
             },
             0x0f => { // RRC
                 self.a = self.a.rotate_right(1);
-                // If register had a bit switched on in the MSB
+                // If register has a bit switched on in the MSB
                 // then rotating right will have caused a carry.
                 if self.a & 0x80 == 0x80 {
                     self.cc.cy = 1;
@@ -487,10 +494,10 @@ impl Cpu {
                 10
             },
             0x35 => { // DCR M
-                let hl = self.hl();
-                let x = self.mem.read(hl).wrapping_sub(1);
+                let addr = self.hl();
+                let x = self.mem.read(addr).wrapping_sub(1);
                 self.set_flags_zsp(x);
-                self.mem.write(hl, x);
+                self.mem.write(addr, x);
                 10
             },
             0x36 => { // MVI M,D8
@@ -962,6 +969,15 @@ impl Cpu {
                 self.h = hi;
                 10
             },
+            0xe2 => { // JPO addr
+                if self.cc.p == 0 {
+                    self.pc = self.read_u16();
+                    return 10;
+                } else {
+                    self.pc += 2;
+                }
+                10
+            },
             0xe3 => { // XTHL
                 let l = self.l;
                 let h = self.h;
@@ -987,6 +1003,15 @@ impl Cpu {
                 self.pc = self.hl();
                 return 5;
             },
+            0xea => { // JPE addr
+                if self.cc.p == 1 {
+                    self.pc = self.read_u16();
+                    return 10;
+                } else {
+                    self.pc += 2;
+                }
+                10
+            },
             0xeb => { // XCHG
                 mem::swap(&mut self.e, &mut self.l);
                 mem::swap(&mut self.d, &mut self.h);
@@ -1001,6 +1026,15 @@ impl Cpu {
                 self.cc.s = (x >> 7) & 0x01;
                 self.a = self.mem.read(self.sp + 1);
                 self.sp += 2;
+                10
+            },
+            0xf2 => { // JP addr
+                if self.cc.s == 0 {
+                    self.pc = self.read_u16();
+                    return 10;
+                } else {
+                    self.pc += 2;
+                }
                 10
             },
             0xf5 => { // PUSH PSW
@@ -1052,127 +1086,25 @@ impl Cpu {
 }
 
 #[test]
-fn test_nop() {
-    let mut cpu = Cpu::with_data(&[0x00]);
-    cpu.step();
-    let mut expected = Cpu::new();
-    expected.pc += 1;
-    assert_eq!(cpu, expected);
+fn test_parity_even1() {
+    let p = parity(0b11001100);
+    assert_eq!(p, 1);
 }
 
 #[test]
-fn test_lxi_b() {
-    let mut cpu = Cpu::with_data(&[0x01, 0xfe, 0xff]);
-    let mut expected = cpu.clone();
-    expected.pc = 3;
-    expected.b = 0xff;
-    expected.c = 0xfe;
-
-    cpu.step();
-    assert_eq!(cpu, expected);
+fn test_parity_even2() {
+    let p = parity(0b11010001);
+    assert_eq!(p, 1);
 }
 
 #[test]
-fn test_stax_b() {
-    let mut cpu = Cpu::new();
-    cpu.mem.write(0, 0x02);
-    cpu.mem.write(0xfffe, 0xaa);
-    cpu.b = 0xfe;
-    cpu.c = 0xff;
-    let mut expected = cpu.clone();
-    expected.pc = 1;
-    expected.b = 0xfe;
-    expected.c = 0xff;
-    expected.a = 0xaa;
-
-    cpu.step();
-    assert_eq!(cpu, expected);
+fn test_parity_odd1() {
+    let p = parity(0b1110000);
+    assert_eq!(p, 0);
 }
 
 #[test]
-fn test_inx_b() {
-    let mut cpu = Cpu::new();
-    cpu.mem.write(0, 0x03);
-    cpu.b = 0xfe;
-    cpu.c = 0xff;
-    let mut expected = cpu.clone();
-    expected.pc = 1;
-    expected.b = 0xff;
-    expected.c = 0xff;
-
-    cpu.step();
-    assert_eq!(cpu, expected);
-}
-
-#[test]
-fn test_inr_b() {
-    //! Test increment register B
-    let mut cpu = Cpu::new();
-    cpu.mem.write(0, 0x04);
-    cpu.b = 0x01;
-    let mut expected = cpu.clone();
-    expected.pc = 1;
-    expected.b = 0x02;
-
-    cpu.step();
-    assert_eq!(cpu, expected);
-}
-
-#[test]
-fn test_inr_b_carry_zero() {
-    //! Test increment register B with Carry and Zero flag
-    let mut cpu = Cpu::new();
-    cpu.mem.write(0, 0x04);
-    cpu.b = 0xff;
-    let mut expected = cpu.clone();
-    expected.pc = 1;
-    expected.b = 0x00;
-    expected.cc.z = 1;
-    expected.cc.cy = 1;
-
-    cpu.step();
-    assert_eq!(cpu, expected);
-}
-
-#[test]
-fn test_dcr_b() {
-    //! Test decrement register B
-    let mut cpu = Cpu::new();
-    cpu.mem.write(0, 0x05);
-    cpu.b = 0x02;
-    let mut expected = cpu.clone();
-    expected.pc = 1;
-    expected.b = 0x01;
-
-    cpu.step();
-    assert_eq!(cpu, expected);
-}
-
-#[test]
-fn test_dcr_b_zero() {
-    //! Test decrement register B with Zero flag
-    let mut cpu = Cpu::new();
-    cpu.mem.write(0, 0x05);
-    cpu.b = 0x01;
-    let mut expected = cpu.clone();
-    expected.pc = 1;
-    expected.b = 0x00;
-    expected.cc.z = 1;
-
-    cpu.step();
-    assert_eq!(cpu, expected);
-}
-
-#[test]
-fn test_mvi_b() {
-    //! Test move immediate word to register B
-    let mut cpu = Cpu::new();
-    cpu.mem.write(0, 0x06);
-    cpu.mem.write(1, 0xee);
-    let mut expected = cpu.clone();
-    expected.pc = 2;
-    expected.b = 0xee;
-
-    cpu.step();
-    assert_eq!(cpu, expected);
+fn test_parity_odd2() {
+    let p = parity(0b1000000);
+    assert_eq!(p, 0);
 }
