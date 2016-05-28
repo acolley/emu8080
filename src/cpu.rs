@@ -236,6 +236,30 @@ impl Cpu {
     }
 
     #[inline(always)]
+    fn rlc(&mut self) {
+        self.a = self.a.rotate_left(1);
+        // If register has a bit switched on in the LSB
+        // then rotating left will have caused a carry.
+        if self.a & 1 == 1 {
+            self.cc.cy = 1;
+        } else {
+            self.cc.cy = 0;
+        }
+    }
+
+    #[inline(always)]
+    fn rrc(&mut self) {
+        self.a = self.a.rotate_right(1);
+        // If register has a bit switched on in the MSB
+        // then rotating right will have caused a carry.
+        if self.a & 0x80 == 0x80 {
+            self.cc.cy = 1;
+        } else {
+            self.cc.cy = 0;
+        }
+    }
+
+    #[inline(always)]
     fn cmp(&mut self, x: u8) {
         let a = self.a as u16 - x as u16;
         self.set_flags_arith(a);
@@ -355,12 +379,7 @@ impl Cpu {
                 7
             },
             0x07 => { // RLC
-                self.a = self.a.rotate_left(1);
-                // If register has a bit switched on in the LSB
-                // then rotating left will have caused a carry.
-                if self.a & 1 == 1 {
-                    self.cc.cy = 1;
-                }
+                self.rlc();
                 4
             },
             0x09 => { // DAD B
@@ -399,12 +418,7 @@ impl Cpu {
                 7
             },
             0x0f => { // RRC
-                self.a = self.a.rotate_right(1);
-                // If register has a bit switched on in the MSB
-                // then rotating right will have caused a carry.
-                if self.a & 0x80 == 0x80 {
-                    self.cc.cy = 1;
-                }
+                self.rrc();
                 4
             },
             0x11 => { // LXI D16,D16
@@ -438,6 +452,11 @@ impl Cpu {
             0x16 => { // MVI D,D8
                 self.d = self.read_byte();
                 7
+            },
+            0x17 => { // RAL
+                self.rlc();
+                self.a &= !self.cc.cy;
+                4
             },
             0x19 => { // DAD D
                 let de = make_u32(self.e, self.d);
@@ -475,14 +494,8 @@ impl Cpu {
                 7
             },
             0x1f => { // RAR
-                // Rotates the carry bit right
-                // and combines it with the value
-                // in register A as MSB.
-                let x = self.a;
-                self.a = (self.cc.cy << 7) | (x >> 1);
-                if x & 0x01 == 1 {
-                    self.cc.cy = 1;
-                }
+                self.rrc();
+                self.a &= !self.cc.cy;
                 4
             },
             0x21 => { // LXI H,D16
@@ -596,6 +609,10 @@ impl Cpu {
                 self.mem.write(addr, self.a);
                 13
             },
+            0x33 => { // INX SP
+                self.sp = self.sp.wrapping_add(1);
+                5
+            },
             0x34 => { // INR M
                 let addr = self.hl();
                 let mut x = self.mem.read(addr);
@@ -631,6 +648,10 @@ impl Cpu {
                 let addr = self.read_u16();
                 self.a = self.mem.read(addr);
                 13
+            },
+            0x3b => { // DCX SP
+                self.sp = self.sp.wrapping_sub(1);
+                5
             },
             0x3c => { // INR A
                 let a = self.a;
@@ -1560,6 +1581,10 @@ impl Cpu {
                 } else {
                     5
                 }
+            },
+            0xf9 => { // SPHL
+                self.sp = self.hl();
+                5
             },
             0xfa => { // JM addr
                 if self.cc.s == 1 {
