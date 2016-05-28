@@ -186,6 +186,7 @@ impl Cpu {
     fn add(&mut self, x: u8) {
         let a = self.a as u16 + x as u16;
         self.set_flags_arith(a);
+        self.cc.ac = if (self.a ^ x ^ (a as u8)) & 0x10 > 0 { 1 } else { 0 };
         self.a = a as u8;
     }
 
@@ -193,6 +194,7 @@ impl Cpu {
     fn adc(&mut self, x: u8) {
         let a = self.a as u16 + x as u16 + self.cc.cy as u16;
         self.set_flags_arith(a);
+        self.cc.ac = if (self.a ^ x ^ (a as u8)) & 0x10 > 0 { 1 } else { 0 };
         self.a = a as u8;
     }
 
@@ -200,6 +202,7 @@ impl Cpu {
     fn sub(&mut self, x: u8) {
         let a = self.a as u16 - x as u16;
         self.set_flags_arith(a);
+        self.cc.ac = if (self.a ^ x ^ (a as u8)) & 0x10 > 0 { 1 } else { 0 };
         self.a = a as u8;
     }
 
@@ -207,6 +210,7 @@ impl Cpu {
     fn sbb(&mut self, x: u8) {
         let a = self.a as u16 - x as u16 - self.cc.cy as u16;
         self.set_flags_arith(a);
+        self.cc.ac = if (self.a ^ x ^ (a as u8)) & 0x10 > 0 { 1 } else { 0 };
         self.a = a as u8;
     }
 
@@ -235,6 +239,7 @@ impl Cpu {
     fn cmp(&mut self, x: u8) {
         let a = self.a as u16 - x as u16;
         self.set_flags_arith(a);
+        self.cc.ac = if (self.a ^ x ^ (a as u8)) & 0x10 > 0 { 1 } else { 0 };
     }
 
     /// CALL instruction
@@ -298,9 +303,8 @@ impl Cpu {
     fn set_flags_arith(&mut self, x: u16) {
         self.set_flags_zsp(x as u8);
         self.cc.cy = if x > 0xff { 1 } else { 0 };
-        // TODO: calculate Auxiliary Carry/Half Carry
         // https://en.wikipedia.org/wiki/Half-carry_flag
-        // self.cc.ac = 
+        // FIXME: superfluous setting of self.cc.ac? 
         self.cc.ac = 0;
     }
 
@@ -337,15 +341,13 @@ impl Cpu {
                 5
             },
             0x04 => { // INR B
-                let b = self.b.wrapping_add(1);
-                self.set_flags_zsp(b);
-                self.b = b;
+                let b = self.b;
+                self.b = self.inr(b);
                 5
             },
             0x05 => { // DCR B
-                let b = self.b.wrapping_sub(1);
-                self.set_flags_zsp(b);
-                self.b = b;
+                let b = self.b;
+                self.b = self.dcr(b);
                 5
             },
             0x06 => { // MVI B,D8
@@ -383,15 +385,13 @@ impl Cpu {
                 5
             },
             0x0c => { // INR C
-                let c = self.c.wrapping_add(1);
-                self.set_flags_zsp(c);
-                self.c = c;
+                let c = self.c;
+                self.c = self.inr(c);
                 5
             },
             0x0d => { // DCR C
-                let c = self.c.wrapping_sub(1);
-                self.set_flags_zsp(c);
-                self.c = c;
+                let c = self.c;
+                self.c = self.dcr(c);
                 5
             },
             0x0e => { // MVI C,D8
@@ -426,15 +426,13 @@ impl Cpu {
                 5
             },
             0x14 => { // INR D
-                let d = self.d.wrapping_add(1);
-                self.set_flags_zsp(d);
-                self.d = d;
+                let d = self.d;
+                self.d = self.inr(d);
                 5
             },
             0x15 => { // DCR D
-                let d = self.d.wrapping_sub(1);
-                self.set_flags_zsp(d);
-                self.d = d;
+                let d = self.d;
+                self.d = self.dcr(d);
                 5
             },
             0x16 => { // MVI D,D8
@@ -463,15 +461,13 @@ impl Cpu {
                 5
             },
             0x1c => { // INR E
-                let e = self.e.wrapping_add(1);
-                self.set_flags_zsp(e);
-                self.e = e;
+                let e = self.e;
+                self.e = self.inr(e);
                 5
             },
             0x1d => { // DCR E
-                let e = self.e.wrapping_sub(1);
-                self.set_flags_zsp(e);
-                self.e = e;
+                let e = self.e;
+                self.e = self.dcr(e);
                 5
             },
             0x1e => { // MVI E,D8
@@ -509,15 +505,13 @@ impl Cpu {
                 5
             },
             0x24 => { // INR H
-                let h = self.h.wrapping_add(1);
-                self.set_flags_zsp(h);
-                self.h = h;
+                let h = self.h;
+                self.h = self.inr(h);
                 5
             },
             0x25 => { // DCR H
-                let h = self.h.wrapping_sub(1);
-                self.set_flags_zsp(h);
-                self.h = h;
+                let h = self.h;
+                self.h = self.dcr(h);
                 5
             },
             0x26 => { // MVI H,D8
@@ -535,6 +529,7 @@ impl Cpu {
                 // 2. If the value of the most significant 4 bits of the 
                 // accumulator is now greater than 9, or if the CY flag is set, 
                 // 6 is added to the most significant 4 bits of the accumulator.
+                // See also https://en.wikipedia.org/wiki/Half-carry_flag
                 let mut a = self.a as u16;
                 if a & 0x0f > 9 || self.cc.ac == 1 {
                     a += 6;
@@ -575,15 +570,13 @@ impl Cpu {
                 5
             },
             0x2c => { // INR L
-                let l = self.l.wrapping_add(1);
-                self.set_flags_zsp(l);
-                self.l = l;
+                let l = self.l;
+                self.l = self.inr(l);
                 5
             },
             0x2d => { // DCR L
-                let l = self.l.wrapping_sub(1);
-                self.set_flags_zsp(l);
-                self.l = l;
+                let l = self.l;
+                self.l = self.dcr(l);
                 5
             },
             0x2e => { // MVI L,D8
@@ -605,15 +598,15 @@ impl Cpu {
             },
             0x34 => { // INR M
                 let addr = self.hl();
-                let x = self.mem.read(addr).wrapping_add(1);
-                self.set_flags_zsp(x);
+                let mut x = self.mem.read(addr);
+                x = self.inr(x);
                 self.mem.write(addr, x);
                 10
             },
             0x35 => { // DCR M
                 let addr = self.hl();
-                let x = self.mem.read(addr).wrapping_sub(1);
-                self.set_flags_zsp(x);
+                let mut x = self.mem.read(addr);
+                x = self.dcr(x);
                 self.mem.write(addr, x);
                 10
             },
@@ -640,15 +633,13 @@ impl Cpu {
                 13
             },
             0x3c => { // INR A
-                let a = self.a.wrapping_add(1);
-                self.set_flags_zsp(a);
-                self.a = a;
+                let a = self.a;
+                self.a = self.inr(a);
                 5
             },
             0x3d => { // DCR A
-                let a = self.a.wrapping_sub(1);
-                self.set_flags_zsp(a);
-                self.a = a;
+                let a = self.a;
+                self.a = self.dcr(a);
                 5
             },
             0x3e => { // MVI A,D8
