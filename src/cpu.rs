@@ -8,7 +8,7 @@ pub struct ConditionCodes {
     pub z: u8, // Zero
     pub s: u8, // Sign
     pub p: u8, // Parity
-    pub cy: u8, // Carry
+    pub cy: bool, // Carry
     pub ac: u8,
     pub pad: u8,
 }
@@ -19,7 +19,7 @@ impl ConditionCodes {
             z: 0x00,
             s: 0x00,
             p: 0x00,
-            cy: 0x00,
+            cy: false,
             ac: 0x00,
             pad: 0x00,
         }
@@ -241,9 +241,9 @@ impl Cpu {
         // If register has a bit switched on in the LSB
         // then rotating left will have caused a carry.
         if self.a & 1 == 1 {
-            self.cc.cy = 1;
+            self.cc.cy = true;
         } else {
-            self.cc.cy = 0;
+            self.cc.cy = false;
         }
     }
 
@@ -253,9 +253,9 @@ impl Cpu {
         // If register has a bit switched on in the MSB
         // then rotating right will have caused a carry.
         if self.a & 0x80 == 0x80 {
-            self.cc.cy = 1;
+            self.cc.cy = true;
         } else {
-            self.cc.cy = 0;
+            self.cc.cy = false;
         }
     }
 
@@ -326,7 +326,7 @@ impl Cpu {
     #[inline(always)]
     fn set_flags_arith(&mut self, x: u16) {
         self.set_flags_zsp(x as u8);
-        self.cc.cy = if x > 0xff { 1 } else { 0 };
+        self.cc.cy = x > 0xff;
         // https://en.wikipedia.org/wiki/Half-carry_flag
         // FIXME: superfluous setting of self.cc.ac? 
         self.cc.ac = 0;
@@ -335,7 +335,7 @@ impl Cpu {
     #[inline(always)]
     fn set_flags_logic(&mut self, x: u8) {
         self.set_flags_zsp(x);
-        self.cc.cy = 0;
+        self.cc.cy = false;
     }
 
     /// Read a byte from memory at the address pointed to
@@ -388,7 +388,7 @@ impl Cpu {
                 let hl = hl.wrapping_add(bc);
                 self.l = (hl & 0xff) as u8;
                 self.h = ((hl & 0xff00) >> 8) as u8;
-                self.cc.cy = if (hl & 0xffff0000) > 0 { 1 } else { 0 };
+                self.cc.cy = (hl & 0xffff0000) > 0;
                 10
             },
             0x0a => { // LDAX B
@@ -454,8 +454,11 @@ impl Cpu {
                 7
             },
             0x17 => { // RAL
-                self.rlc();
-                self.a &= !self.cc.cy;
+                let mut a = self.a << 1;
+                let cy = self.cc.cy;
+                self.cc.cy = (self.a & 0x80) != 0;
+                a = (a & 0xfe) | cy as u8;
+                self.a = a;
                 4
             },
             0x19 => { // DAD D
@@ -464,7 +467,7 @@ impl Cpu {
                 let hl = hl.wrapping_add(de);
                 self.l = (hl & 0xff) as u8;
                 self.h = ((hl & 0xff00) >> 8) as u8;
-                self.cc.cy = if (hl & 0xffff0000) != 0 { 1 } else { 0 };
+                self.cc.cy = (hl & 0xffff0000) != 0;
                 10
             },
             0x1a => { // LDAX D
@@ -494,8 +497,11 @@ impl Cpu {
                 7
             },
             0x1f => { // RAR
-                self.rrc();
-                self.a &= !self.cc.cy;
+                let mut a = self.a >> 1;
+                let cy = self.cc.cy;
+                self.cc.cy = (self.a & 0x01) != 0;
+                a = (a & 0xfe) | cy as u8;
+                self.a = a;
                 4
             },
             0x21 => { // LXI H,D16
@@ -550,11 +556,11 @@ impl Cpu {
                 } else {
                     self.cc.ac = 0;
                 }
-                if a & 0xf0 > 0x90 || self.cc.cy == 1 {
+                if a & 0xf0 > 0x90 || self.cc.cy {
                     a += 0x60;
-                    self.cc.cy = 1;
+                    self.cc.cy = true;
                 } else {
-                    self.cc.cy = 0;
+                    self.cc.cy = false;
                 }
                 self.set_flags_zsp(a as u8);
                 self.a = a as u8;
@@ -565,12 +571,11 @@ impl Cpu {
                 let hl = hl.wrapping_add(hl);
                 self.l = (hl & 0xff) as u8;
                 self.h = ((hl & 0xff00) >> 8) as u8;
-                self.cc.cy = if (hl & 0xffff0000) != 0 { 1 } else { 0 };
+                self.cc.cy = (hl & 0xffff0000) != 0;
                 10
             },
             0x2a => { // LHLD addr
-                let (lo, hi) = self.read_two_bytes();
-                let addr = make_u16(lo, hi);
+                let addr = self.read_u16();
                 self.l = self.mem.read(addr);
                 self.h = self.mem.read(addr + 1);
                 16
@@ -634,14 +639,14 @@ impl Cpu {
                 10
             },
             0x37 => { // STC
-                self.cc.cy = 1;
+                self.cc.cy = true;
                 4
             },
             0x39 => { // DAD SP
                 let hl = make_u32(self.l, self.h);
                 let sp = (self.sp as u32).wrapping_add(hl);
                 self.sp = (sp & 0x0000ffff) as u16;
-                self.cc.cy = if (sp & 0xffff0000) != 0 { 1 } else { 0 };
+                self.cc.cy = (sp & 0xffff0000) != 0;
                 10
             },
             0x3a => { // LDA addr
@@ -1289,9 +1294,7 @@ impl Cpu {
             },
             0xc6 => { // ADI D8
                 let x = self.read_byte();
-                let a = (self.a as u16).wrapping_add(x as u16);
-                self.set_flags_arith(a);
-                self.a = a as u8;
+                self.add(x);
                 7
             },
             0xc8 => { // RZ
@@ -1330,15 +1333,11 @@ impl Cpu {
             },
             0xce => { // ACI D8
                 let x = self.read_byte();
-                let a = (self.a as u16)
-                    .wrapping_add(x as u16)
-                    .wrapping_add(self.cc.cy as u16);
-                self.set_flags_arith(a);
-                self.a = a as u8;
+                self.adc(x);
                 7
             },
             0xd0 => { // RNC
-                if self.cc.cy == 0 {
+                if !self.cc.cy {
                     self.ret();
                     return 11;
                 } else {
@@ -1352,7 +1351,7 @@ impl Cpu {
                 10
             },
             0xd2 => { // JNC addr
-                if self.cc.cy == 0 {
+                if !self.cc.cy {
                     self.pc = self.read_u16();
                     return 10;
                 } else {
@@ -1366,7 +1365,7 @@ impl Cpu {
                 10
             },
             0xd4 => { // CNC addr
-                if self.cc.cy == 0 {
+                if !self.cc.cy {
                     self.call();
                     return 17;
                 } else {
@@ -1381,13 +1380,11 @@ impl Cpu {
             },
             0xd6 => { // SUI D8
                 let x = self.read_byte();
-                let a = (self.a as u16).wrapping_sub(x as u16);
-                self.set_flags_arith(a);
-                self.a = a as u8;
+                self.sub(x);
                 7
             },
             0xd8 => { // RC
-                if self.cc.cy == 1 {
+                if self.cc.cy {
                     self.ret();
                     return 11;
                 } else {
@@ -1395,7 +1392,7 @@ impl Cpu {
                 }
             },
             0xda => { // JC addr
-                if self.cc.cy == 1 {
+                if self.cc.cy {
                     self.pc = self.read_u16();
                     return 10;
                 } else {
@@ -1409,7 +1406,7 @@ impl Cpu {
                 10
             },
             0xdc => { // CC addr
-                if self.cc.cy == 1 {
+                if self.cc.cy {
                     self.call();
                     return 17;
                 } else {
@@ -1419,9 +1416,7 @@ impl Cpu {
             },
             0xde => { // SBI D8
                 let x = self.read_byte();
-                let a = self.a as u16 - x as u16 - self.cc.cy as u16;
-                self.set_flags_arith(a);
-                self.a = a as u8;
+                self.sbb(x);
                 7
             },
             0xe0 => { // RPO
@@ -1472,9 +1467,7 @@ impl Cpu {
             },
             0xe6 => { // ANI D8
                 let x = self.read_byte();
-                let a = self.a & x;
-                self.set_flags_logic(a);
-                self.a = a;
+                self.ana(x);
                 7
             },
             0xe8 => { // RPE
@@ -1514,14 +1507,12 @@ impl Cpu {
             },
             0xee => { // XRI D8
                 let x = self.read_byte();
-                let a = self.a ^ x;
-                self.set_flags_logic(a);
-                self.a = a;
+                self.xra(x);
                 7
             },
             0xf1 => { // POP PSW
                 let x = self.mem.read(self.sp);
-                self.cc.cy = x & 0b00000001;
+                self.cc.cy = (x & 0b00000001) != 0;
                 self.cc.p = (x >> 2) & 0x01;
                 self.cc.ac = (x >> 4) & 0x01;
                 self.cc.z = (x >> 6) & 0x01;
@@ -1559,7 +1550,7 @@ impl Cpu {
             0xf5 => { // PUSH PSW
                 self.mem.write(self.sp - 1, self.a);
                 let mut psw = 0b00000010;
-                psw |= self.cc.cy;
+                psw |= self.cc.cy as u8;
                 psw |= self.cc.p << 2;
                 psw |= self.cc.ac << 4;
                 psw |= self.cc.z << 6;
@@ -1569,9 +1560,8 @@ impl Cpu {
                 11
             },
             0xf6 => { // ORI D8
-                let a = self.a | self.read_byte();
-                self.set_flags_logic(a);
-                self.a = a;
+                let x = self.read_byte();
+                self.ora(x);
                 7
             },
             0xf8 => { // RM
