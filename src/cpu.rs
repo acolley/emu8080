@@ -500,7 +500,7 @@ impl Cpu {
                 let mut a = self.a >> 1;
                 let cy = self.cc.cy;
                 self.cc.cy = (self.a & 0x01) != 0;
-                a = (a & 0xfe) | cy as u8;
+                a = (a & 0x7f) | ((cy as u8) << 7);
                 self.a = a;
                 4
             },
