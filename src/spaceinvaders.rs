@@ -1,3 +1,5 @@
+use ears::{Sound, AudioController};
+
 use glium;
 use glium::{DisplayBuild, Program, Rect, Surface};
 use glium::backend::glutin_backend::GlutinFacade;
@@ -63,10 +65,31 @@ pub struct SpaceInvadersMachine {
     vertex_buffer: glium::VertexBuffer<Vertex>,
     index_buffer: glium::IndexBuffer<u16>,
     vbuffer: Vec<Vec<(u8, u8, u8)>>,
+    last_out_port3: u8,
+    last_out_port5: u8,
+    sound0: Sound,
+    sound1: Sound,
+    sound2: Sound,
+    sound3: Sound,
+    sound4: Sound,
+    sound5: Sound,
+    sound6: Sound,
+    sound7: Sound,
+    sound8: Sound,
 }
 
 impl SpaceInvadersMachine {
-    pub fn new(data: &[u8]) -> Self {
+    pub fn new(
+        data: &[u8],
+        sound0: Sound,
+        sound1: Sound,
+        sound2: Sound,
+        sound3: Sound,
+        sound4: Sound,
+        sound5: Sound,
+        sound6: Sound,
+        sound7: Sound,
+        sound8: Sound) -> Self {
         let window = glutin::WindowBuilder::new()
             .with_dimensions(WIDTH, HEIGHT)
             .with_title("Space Invaders".to_string())
@@ -185,6 +208,17 @@ impl SpaceInvadersMachine {
             vertex_buffer: vertex_buffer,
             index_buffer: index_buffer,
             vbuffer: vbuffer,
+            last_out_port3: 0,
+            last_out_port5: 0,
+            sound0: sound0,
+            sound1: sound1,
+            sound2: sound2,
+            sound3: sound3,
+            sound4: sound4,
+            sound5: sound5,
+            sound6: sound6,
+            sound7: sound7,
+            sound8: sound8,
         }
     }
 
@@ -207,7 +241,6 @@ impl SpaceInvadersMachine {
         // changed since the last frame. This means we
         // only have to upload the diff instead of the
         // entire buffer every frame.
-        // let mut pixels = Vec::with_capacity(HEIGHT as usize);
         let (mut xmin, mut xmax) = (::std::u32::MAX, 0);
         let (mut ymin, mut ymax) = (::std::u32::MAX, 0);
         for y in 0..HEIGHT {
@@ -238,7 +271,6 @@ impl SpaceInvadersMachine {
                     }
                 }
             }
-            // pixels.push(row);
         }
 
         if xmin < ::std::u32::MAX && ymin < ::std::u32::MAX {
@@ -257,29 +289,11 @@ impl SpaceInvadersMachine {
                         (0x00, 0x00, 0x00)
                     };
                     row.push(value);
-                    // pixels[y as usize][x as usize] = value;
                 }
                 pixels.push(row);
             }
             self.texture.write(Rect { left: xmin, bottom: ymin, width: width, height: height }, pixels);
         }
-
-        // let mut pixels = Vec::with_capacity(HEIGHT as usize);
-        // for y in 0..HEIGHT {
-        //     let mut row: Vec<(u8, u8, u8)> = Vec::with_capacity(WIDTH as usize);
-        //     for x in 0..WIDTH {
-        //         let offset = (x * (HEIGHT / 8)) + y / 8;
-        //         let byte = self.cpu.mem.read(0x2400 + (offset as u16));
-        //         let p = y % 8;
-        //         if (byte & (1 << p)) != 0 {
-        //             row.push((0xff, 0xff, 0xff));
-        //         } else {
-        //             row.push((0x00, 0x00, 0x00));
-        //         }
-        //     }
-        //     pixels.push(row);
-        // }
-        // self.texture.write(Rect { left: 0, bottom: 0, width: WIDTH, height: HEIGHT }, pixels);
 
         let sampled = self.texture.sampled()
             .minify_filter(MinifySamplerFilter::Nearest)
@@ -304,11 +318,67 @@ impl SpaceInvadersMachine {
             &uniforms,
             &Default::default()).unwrap();
         frame.finish().unwrap();
+    }
 
+    #[inline(always)]
+    fn handle_sound(&mut self, port: u8, value: u8) {
+        match port {
+            3 => {
+                if self.last_out_port3 != value {
+                    // UFO
+                    if (value & 0x1 != 0) && (self.last_out_port3 & 0x1 == 0) {
+                        self.sound0.play();
+                    } else if (value & 0x1 == 0) && (self.last_out_port3 & 0x1 != 0) {
+                        self.sound0.stop();
+                    }
 
-        // if xmin < ::std::u32::MAX && ymin < ::std::u32::MAX {
-        //     thread::sleep(::std::time::Duration::new(0, 500_000_000));
-        // }
+                    // Player Shot
+                    if (value & 0x2 != 0) && (self.last_out_port3 & 0x2 == 0) {
+                        self.sound1.play();
+                    }
+
+                    // Player Die
+                    if (value & 0x4 != 0) && (self.last_out_port3 & 0x4 == 0) {
+                        self.sound2.play();
+                    }
+
+                    // Invader explosion
+                    if (value & 0x8 != 0) && (self.last_out_port3 & 0x8 == 0) {
+                        self.sound3.play();
+                    }
+
+                    self.last_out_port3 = value;
+                }
+            },
+            5 => {
+                if self.last_out_port5 != value {
+                    // Fleet movement
+                    if (value & 0x1 != 0) && (self.last_out_port5 & 0x1 == 0) {
+                        self.sound4.play();
+                    }
+                    // Fleet movement
+                    if (value & 0x2 != 0) && (self.last_out_port5 & 0x2 == 0) {
+                        self.sound5.play();
+                    }
+                    // Fleet movement
+                    if (value & 0x4 != 0) && (self.last_out_port5 & 0x4 == 0) {
+                        self.sound6.play();
+                    }
+                    // Fleet movement
+                    if (value & 0x8 != 0) && (self.last_out_port5 & 0x8 == 0) {
+                        self.sound7.play();
+                    }
+
+                    // UFO hit
+                    if (value & 0x10 != 0) && (self.last_out_port5 & 0x10 == 0) {
+                        self.sound8.play();
+                    }
+
+                    self.last_out_port5 = value;
+                }
+            },
+            _ => panic!("Not a valid sound port: {}", port)
+        }
     }
 
     #[inline(always)]
@@ -426,14 +496,13 @@ impl Machine for SpaceInvadersMachine {
     #[inline(always)]
     fn step(&mut self) -> u32 {
         let op = self.cpu.mem.read(self.cpu.pc);
-        // println!("{:>0pad$x}", self.cpu.pc, pad=4);
         match op {
             0xd3 => { // OUT D8
                 let port = self.cpu.mem.read(self.cpu.pc + 1);
                 let value = self.cpu.a;
-                // self.cpu.ports[port as usize] = value;
                 match port {
                     2 => self.shift_offset = value & 0x7,
+                    3 | 5 => self.handle_sound(port, value),
                     4 => {
                         self.shift0 = self.shift1;
                         self.shift1 = value;

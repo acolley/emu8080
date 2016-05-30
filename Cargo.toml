@@ -5,6 +5,7 @@ authors = ["acolley <alnessy@hotmail.com>"]
 
 [dependencies]
 clap = "2.5.1"
+ears = "0.3.4"
 glium = "0.14.0"
 nom = "1.2.3"
 time = "0.1.35"
