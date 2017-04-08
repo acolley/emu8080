@@ -1,7 +1,5 @@
-# emu8080
-An emulator for 8080 CPU written in Rust.
-
-Also contains an implementation of the Space Invaders machine that uses the emulated CPU.
+# Space Invaders
+An emulator for the original Space Invaders game, including the emulation of the 8080 CPU.
 
 You must be running the latest nightly version of Rust in order to compile it.
 
